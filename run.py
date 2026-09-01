@@ -12,6 +12,11 @@ import glob
 import os
 import shutil
 import socket
+
+# Set before anything from the model stack is imported; see mynah/__init__.py.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("TQDM_DISABLE", "1")
 import subprocess
 import sys
 import threading

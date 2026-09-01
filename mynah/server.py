@@ -163,7 +163,7 @@ def update_project(body: ProjectBody) -> dict:
 
 # ---- voices --------------------------------------------------------------
 
-def _compile_voice(voice_id: str, source: Path, name: str) -> None:
+def _compile_voice(voice_id: str, source: Path, name: str, previous: str) -> None:
     directory = store.voice_dir(voice_id)
     meta_path = directory / "meta.json"
 
@@ -192,6 +192,12 @@ def _compile_voice(voice_id: str, source: Path, name: str) -> None:
     except Exception as error:  # noqa: BLE001 - surfaced in the UI
         write_meta(status="error", error=f"{type(error).__name__}: {error}")
         RENDER.note(f"voice {name!r} failed: {error}")
+        # The upload selected this voice; a project must not stay pointed at
+        # one that never came to exist.
+        with RENDER.lock:
+            if RENDER.project.voice_id == voice_id:
+                RENDER.project.voice_id = previous
+                RENDER.project.save()
     finally:
         source.unlink(missing_ok=True)
 
@@ -211,9 +217,13 @@ async def add_voice(file: UploadFile, name: str = "") -> dict:
     with source.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
     label = name.strip() or Path(file.filename or "voice").stem or "voice"
-    threading.Thread(target=_compile_voice, args=(voice_id, source, label),
+    with RENDER.lock:
+        previous = RENDER.project.voice_id
+        RENDER.project.voice_id = voice_id
+        RENDER.project.save()
+    threading.Thread(target=_compile_voice, args=(voice_id, source, label, previous),
                      daemon=True).start()
-    return {"id": voice_id, "name": label}
+    return RENDER.snapshot()
 
 
 @app.delete("/api/voices/{voice_id}")

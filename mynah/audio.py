@@ -83,6 +83,67 @@ def save(wav: torch.Tensor, path: Path, sample_rate: int) -> Path:
     return path
 
 
+# Stitch-time conditioning. The model leaves ~0.1 s of silence before speech
+# and ~0.2 s after, so without trimming a "0.4 s pause" is really ~0.7 s and
+# the setting lies. Takes from one voice also land a couple of dB apart from
+# each other, which is audible exactly at the joins.
+TRIM_DB = -50.0        # below this counts as silence
+EDGE_MARGIN = 0.04     # seconds of the model's own silence kept at each end
+FADE = 0.008           # seconds; kills clicks where takes butt together
+
+
+def _trim(data, rate: int):
+    import numpy as np
+
+    idx = np.flatnonzero(np.abs(data) > 10 ** (TRIM_DB / 20))
+    if idx.size == 0:
+        return data
+    margin = int(EDGE_MARGIN * rate)
+    return data[max(0, idx[0] - margin): min(len(data), idx[-1] + 1 + margin)]
+
+
+def _fade(data, rate: int):
+    import numpy as np
+
+    n = min(int(FADE * rate), len(data) // 2)
+    if n <= 0:
+        return data
+    ramp = np.linspace(0.0, 1.0, n, dtype="float32")
+    data = data.copy()
+    data[:n] *= ramp
+    data[-n:] *= ramp[::-1]
+    return data
+
+
+def _match_loudness(pieces: list, rate: int) -> list:
+    """Bring every take to the median loudness of the set.
+
+    The median, not a fixed target, so one odd take moves and the rest stay
+    where the reference put them. Takes too short to measure are left alone.
+    """
+    import numpy as np
+    import pyloudnorm
+
+    meter = pyloudnorm.Meter(rate)
+    levels = []
+    for data in pieces:
+        try:
+            level = meter.integrated_loudness(data.astype("float64"))
+        except Exception:  # noqa: BLE001 - shorter than one 400 ms block
+            level = float("nan")
+        levels.append(level if np.isfinite(level) else float("nan"))
+    finite = [l for l in levels if np.isfinite(l)]
+    if len(finite) < 2:
+        return pieces
+    target = float(np.median(finite))
+    out = []
+    for data, level in zip(pieces, levels):
+        if np.isfinite(level):
+            data = data * (10 ** ((target - level) / 20))
+        out.append(data.astype("float32"))
+    return out
+
+
 def stitch(pieces: list[tuple[Path, float]], target: Path, sample_rate: int) -> Path:
     """Concatenate rendered chunks, inserting each one's trailing pause.
 
@@ -92,16 +153,26 @@ def stitch(pieces: list[tuple[Path, float]], target: Path, sample_rate: int) -> 
     """
     import numpy as np
 
-    parts: list = []
+    takes, pauses = [], []
     for path, pause in pieces:
         data, rate = sf.read(str(path), dtype="float32")
         if rate != sample_rate:
             raise RuntimeError(f"{path.name} is {rate} Hz, expected {sample_rate}")
+        takes.append(_trim(data, rate))
+        pauses.append(max(0.0, pause))
+    if not takes:
+        raise RuntimeError("nothing to stitch: no chunks have been generated yet")
+
+    takes = [_fade(t, sample_rate) for t in _match_loudness(takes, sample_rate)]
+    parts: list = []
+    for data, pause in zip(takes, pauses):
         parts.append(data)
         if pause > 0:
             parts.append(np.zeros(int(pause * sample_rate), dtype="float32"))
-    if not parts:
-        raise RuntimeError("nothing to stitch: no chunks have been generated yet")
+    mixed = np.concatenate(parts)
+    peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
+    if peak > 0.99:
+        mixed *= 0.99 / peak
     target.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(target), np.concatenate(parts), sample_rate)
+    sf.write(str(target), mixed, sample_rate)
     return target

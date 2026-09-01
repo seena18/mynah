@@ -29,12 +29,13 @@ the record.
 ## Requirements
 
 - Python 3.10–3.12 (tested on 3.12)
-- ~4 GB free disk for the model, ~16 GB RAM
+- ~3 GB free disk for the model; 16 GB RAM is comfortable, 8 GB is not
 - Apple silicon (Metal), an NVIDIA GPU (CUDA), or CPU if you are patient
 
 The model is [Chatterbox Turbo](https://github.com/resemble-ai/chatterbox) by
-Resemble AI — a 302M-parameter transformer with a 266M vocoder, ~746M total,
-about 3 GB in float32. It downloads on first run.
+Resemble AI — a 302M-parameter transformer with a 266M vocoder, ~746M total.
+It downloads on first run (~2.85 GB) and takes about **4.4 GB** on the GPU
+while generating, measured on an M1 Pro.
 
 ## Install
 
@@ -85,7 +86,10 @@ a URL that goes nowhere.
 3. **Generate.** *Generate stale chunks* queues everything unrendered. ↻ on a
    row re-rolls just that row — useful when a take is fine except for one word.
 4. **Export.** Stitches the takes together with each chunk's trailing pause and
-   downloads a WAV.
+   downloads a WAV. At this step each take is trimmed of the model's own
+   leading and trailing silence, loudness-matched to the others, and given an
+   8 ms fade at each end — so a 0.4 s pause is 0.4 s, and takes that came out
+   a couple of dB apart do not announce the join.
 
 ### Getting output that does not sound choppy
 
@@ -131,8 +135,24 @@ the project to drift out of sync.
 - **The NumPy pin is load-bearing.** numba (via librosa) rejects NumPy 2.4+. A
   fresh install without the pin in `requirements.txt` resolves to something
   newer and every import of the model fails.
+- **Only the files Turbo reads are downloaded.** Upstream's loader fetches
+  every `.safetensors` in the repo, including a 1 GB vocoder the Turbo class
+  never opens. `engine.MODEL_FILES` lists what is actually needed; if that
+  list ever goes stale against upstream, it falls back to their loader.
+- **float16 does not work on Metal.** Tried: the model mixes dtypes in at
+  least one `add` and MPSGraph aborts the process rather than raising. It
+  runs in float32 everywhere.
 - Only one generation runs at a time. A GPU has one queue anyway; running two
   mostly gives you two slow ones.
+
+## Tests
+
+Everything that does not need the model — splitting, fingerprints, chunk
+status, the stitch's pause accuracy and loudness matching — is covered:
+
+```bash
+python -m unittest discover tests
+```
 
 ## Clone responsibly
 

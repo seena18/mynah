@@ -14,6 +14,17 @@ from pathlib import Path
 
 import torch
 
+REPO_ID = "ResembleAI/chatterbox-turbo"
+# The files Turbo's loader actually opens. Upstream's from_pretrained fetches
+# every *.safetensors in the repo, which includes the 1 GB s3gen.safetensors
+# that the Turbo class never reads — a quarter of the first-run download for
+# nothing. Listing the files means a new user downloads ~2.85 GB, not ~3.85.
+MODEL_FILES = [
+    "ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors",
+    "conds.pt", "tokenizer_config.json", "vocab.json", "merges.txt",
+    "special_tokens_map.json", "added_tokens.json",
+]
+
 
 def pick_device() -> str:
     if torch.backends.mps.is_available():
@@ -48,6 +59,7 @@ class Engine:
         self.device = pick_device()
         self.state = "cold"          # cold | loading | ready | error
         self.error = ""
+        self.loader = ""             # "local" (narrow download) or "upstream"
         self._model = None
         self._conds_cls = None
         self._lock = threading.RLock()
@@ -63,10 +75,22 @@ class Engine:
             self.state = "loading"
         try:
             from chatterbox.tts_turbo import ChatterboxTurboTTS, Conditionals
+            from huggingface_hub import snapshot_download
 
-            model = ChatterboxTurboTTS.from_pretrained(device=self.device)
+            try:
+                checkpoint = Path(snapshot_download(
+                    repo_id=REPO_ID, allow_patterns=MODEL_FILES))
+                model = ChatterboxTurboTTS.from_local(checkpoint, self.device)
+                loader = "local"
+            except Exception:  # noqa: BLE001 - see below
+                # If upstream renames a file, the explicit list above goes
+                # stale before this code does. Fall back to their loader
+                # rather than fail on a filename.
+                model = ChatterboxTurboTTS.from_pretrained(device=self.device)
+                loader = "upstream"
             with self._lock:
                 self._model, self._conds_cls = model, Conditionals
+                self.loader = loader
                 self.state = "ready"
         except Exception as error:  # noqa: BLE001 - surfaced to the UI verbatim
             with self._lock:

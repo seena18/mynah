@@ -118,6 +118,7 @@ class Renderer:
                 "engine": {
                     "state": ENGINE.state,
                     "device": ENGINE.device,
+                    "loader": ENGINE.loader,
                     "error": ENGINE.error,
                 },
                 "queue": {"current": self.current, "pending": len(self.pending)},

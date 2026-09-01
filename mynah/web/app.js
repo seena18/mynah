@@ -10,6 +10,13 @@ const $ = (id) => document.getElementById(id);
 let STATE = null;
 let rows = new Map();          // chunk id -> row element
 let recorder = null;
+let playing = null;            // the one <audio> allowed to be audible
+
+/* The model refuses a reference under 5 s of audio. The browser drops a few
+   hundred ms between start() and the first captured sample, so a timer that
+   reads 5.0 can be 4.3 s of audio — which is exactly the failure a user hits.
+   Six seconds on the clock keeps a margin the server has never rejected. */
+const MIN_RECORD = 6;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -74,10 +81,11 @@ function renderVoices(voices, selected) {
     select.value = selected || '';
   }
   const current = voices.find(v => v.id === selected);
+  // A failed voice is reported by name, because after a failure the server
+  // has already reselected the previous voice — the user needs to see why
+  // the new one is not the one in the picker. It stays until deleted with ✕.
   const failed = voices.find(v => v.status === 'error');
-  // Report the selected voice's real state. Saying "ready" just because
-  // something is selected hides the compile step entirely.
-  $('voice-hint').textContent = failed ? failed.error
+  $('voice-hint').textContent = failed ? `${failed.name}: ${failed.error}`
     : !current ? 'needs more than 5 seconds of clear speech'
     : current.status === 'ready' ? `ready · ${current.seconds}s reference`
     : 'compiling…';
@@ -119,7 +127,18 @@ function buildRow(chunk) {
   li.querySelector('.drop').addEventListener('click', () =>
     api(`/api/chunks/${chunk.id}`, { method: 'DELETE' }).then(apply));
   li.querySelector('.play').addEventListener('click', () => {
+    // One take at a time. A second click on the same row stops it; a click
+    // on another row swaps to it. Without this, every click layered a new
+    // playback over the last.
+    if (playing) {
+      const same = playing.dataset.chunk === chunk.id;
+      playing.pause(); playing = null;
+      if (same) return;
+    }
     const audio = new Audio(`/api/takes/${chunk.id}.wav?v=${li.dataset.fingerprint}`);
+    audio.dataset.chunk = chunk.id;
+    audio.onended = () => { if (playing === audio) playing = null; };
+    playing = audio;
     audio.play();
   });
   return li;
@@ -173,15 +192,21 @@ async function startRecording() {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const chunks = [];
   recorder = new MediaRecorder(stream);
-  const started = Date.now();
   const timer = $('rec-timer');
+  const note = $('rec-note');
+  note.hidden = true;
   timer.hidden = false;
+  timer.textContent = '0.0s';
+  timer.style.color = 'var(--bad)';
+  // Clock from the moment capture actually begins, not from the click.
+  let started = 0;
+  let seconds = 0;
+  recorder.onstart = () => { started = Date.now(); };
   const tick = setInterval(() => {
-    const seconds = (Date.now() - started) / 1000;
+    if (!started) return;
+    seconds = (Date.now() - started) / 1000;
     timer.textContent = `${seconds.toFixed(1)}s`;
-    // The model rejects a reference under five seconds, so say when it is safe
-    // to stop rather than letting the upload fail afterwards.
-    timer.style.color = seconds < 5 ? 'var(--bad)' : 'var(--ok)';
+    timer.style.color = seconds < MIN_RECORD ? 'var(--bad)' : 'var(--ok)';
   }, 100);
 
   recorder.ondataavailable = (event) => chunks.push(event.data);
@@ -191,9 +216,19 @@ async function startRecording() {
     stream.getTracks().forEach(track => track.stop());
     $('record').classList.remove('recording');
     $('record').textContent = '● Record';
-    const blob = new Blob(chunks, { type: recorder.mimeType });
-    await sendVoice(new File([blob], 'recording.webm', { type: blob.type }));
+    const mimeType = recorder.mimeType;
     recorder = null;
+    if (seconds < MIN_RECORD) {
+      // Do not upload a clip that will be refused; say so here instead of
+      // leaving a failed voice in the list.
+      note.textContent = `Recording was ${seconds.toFixed(1)}s — keep going past `
+        + `${MIN_RECORD}s so the model gets its 5s of speech. Nothing was saved.`;
+      note.style.color = 'var(--warn)';
+      note.hidden = false;
+      return;
+    }
+    const blob = new Blob(chunks, { type: mimeType });
+    await sendVoice(new File([blob], 'recording.webm', { type: blob.type }));
   };
   recorder.start();
   $('record').classList.add('recording');
@@ -208,9 +243,10 @@ async function sendVoice(file) {
   const response = await fetch(`/api/voices?name=${encodeURIComponent(name)}`,
     { method: 'POST', body: form });
   if (!response.ok) { alert('upload failed'); return; }
-  const voice = await response.json();
-  // Select it optimistically; the picker keeps it disabled until it compiles.
-  await post('/api/project', { voice_id: voice.id }).then(apply);
+  // The server selects the new voice itself, and puts the previous one back
+  // if compilation fails — so a bad upload never leaves the project pointing
+  // at a voice that does not exist.
+  apply(await response.json());
 }
 
 /* ---- wiring ------------------------------------------------------------ */
