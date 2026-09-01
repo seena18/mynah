@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    # Everything that does not need the model: splitting, fingerprints, chunk
+    # status, project migration, and the stitch's pause and loudness checks.
+    # No torch, no weights — runs in well under a minute.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy soundfile pyloudnorm
+      - run: python -m unittest discover -v tests
+
+  resolve:
+    # Prove the dependency set still resolves for a fresh install, without
+    # downloading torch. This is the check that would have caught chatterbox's
+    # numpy<1.26 pin having no Python 3.12 wheel.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv pip compile requirements.txt --python-version 3.12 --python-platform linux -o /tmp/resolved.txt
+      - run: uv lock --check

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import soundfile as sf
-import torch
+
+if TYPE_CHECKING:            # torch is only a type here; the tests run without it
+    import torch
 
 # prepare_conditionals asserts the reference is longer than five seconds. Catch
 # it here instead, where there is a person to tell.
@@ -77,7 +80,9 @@ def duration(path: Path) -> float:
     return info.frames / float(info.samplerate)
 
 
-def save(wav: torch.Tensor, path: Path, sample_rate: int) -> Path:
+def save(wav: "torch.Tensor", path: Path, sample_rate: int) -> Path:
+    """Write a (1, samples) tensor as a WAV. Duck-typed on purpose, so this
+    module — and the test suite — never imports torch."""
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(path), wav.squeeze(0).cpu().numpy(), sample_rate)
     return path

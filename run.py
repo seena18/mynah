@@ -117,6 +117,9 @@ def main() -> int:
                         help="bind address; the default keeps it off the network")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--download", action="store_true",
+                        help="fetch the model weights now and exit; the server "
+                             "does this on first start otherwise")
     args = parser.parse_args()
 
     problem = preflight()
@@ -124,6 +127,21 @@ def main() -> int:
         print(f"\n{problem}\n", file=sys.stderr)
         return 1
 
+    os.chdir(Path(__file__).resolve().parent)
+    from mynah.engine import ENGINE, MODEL_DIR_ENV
+
+    if args.download:
+        cached = ENGINE.cached()
+        if cached:
+            print(f"weights already here: {cached[0]}  ({cached[1] / 1e9:.2f} GB)")
+            return 0
+        print("downloading weights (~3 GB, anonymous, from huggingface.co)…")
+        path = ENGINE.download(log=print)
+        size = ENGINE.cached()
+        print(f"done: {path}  ({(size[1] if size else 0) / 1e9:.2f} GB)")
+        return 0
+
+    # Only a server needs the port; --download above must work while one runs.
     if port_in_use(args.host, args.port):
         print(f"\nPort {args.port} is already in use — mynah may already be "
               f"running at\n  http://localhost:{args.port}\n\n"
@@ -131,11 +149,19 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
+    cached = ENGINE.cached()
+    if cached:
+        origin = "MYNAH_MODEL_DIR" if os.environ.get(MODEL_DIR_ENV) else "cache"
+        print(f"weights: {cached[1] / 1e9:.2f} GB in {origin} · device: {ENGINE.device}",
+              flush=True)
+    else:
+        print("weights: not downloaded yet — first start fetches ~3 GB "
+              "(or run `python run.py --download` first)", flush=True)
+
     import uvicorn
 
-    os.chdir(Path(__file__).resolve().parent)
     url = f"http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.port}"
-    print(f"mynah → {url}")
+    print(f"mynah → {url}", flush=True)
     if not args.no_open:
         threading.Timer(1.5, webbrowser.open, [url]).start()
     uvicorn.run("mynah.server:app", host=args.host, port=args.port,

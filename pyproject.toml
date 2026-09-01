@@ -1,0 +1,38 @@
+# Enough metadata for `uv run run.py` to create a venv on the right Python and
+# install everything — nothing else. mynah is run from its checkout, not
+# installed as a package, hence `package = false`.
+[project]
+name = "mynah"
+version = "0.2.0"
+description = "Self-hosted voice cloning TTS with per-chunk regeneration"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  # Chatterbox Turbo lives on the repo's main branch, not on PyPI; this pins
+  # the commit that introduced it. Needs `git` on PATH to install.
+  "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox@ed27b95",
+  # numba (via librosa, via chatterbox) refuses NumPy 2.4+.
+  "numpy>=1.26,<2.4",
+  # resemble-perth imports pkg_resources, gone from setuptools 81; without
+  # this the watermarker is silently None and model load fails.
+  "setuptools<81",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "python-multipart>=0.0.9",
+  "soundfile>=0.12",
+  "imageio-ffmpeg>=0.5",
+]
+
+[project.urls]
+Repository = "https://github.com/seena18/mynah"
+
+[tool.uv]
+package = false
+# chatterbox's metadata pins numpy<1.26 (no Python 3.12 wheel; the code runs
+# on 2.x) and pulls in gradio, a demo UI never imported on the Turbo path.
+# Overrides replace those two declared requirements; nothing else changes.
+override-dependencies = [
+  "numpy>=1.26,<2.4",
+  "gradio; python_version < '3'",
+]

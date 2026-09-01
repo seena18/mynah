@@ -1,13 +1,45 @@
-# Chatterbox Turbo lives on the repo's main branch, not on PyPI, so this pins
-# the commit that introduced it rather than a release number.
-chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox@ed27b95
+# ---------------------------------------------------------------------------
+# Install in two steps with pip (or one with uv — see README):
+#
+#   pip install -r requirements.txt
+#   pip install --no-deps "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox@ed27b95"
+#
+# Why --no-deps: chatterbox's own metadata pins numpy<1.26, which has no wheel
+# for Python 3.12 — a plain `pip install chatterbox-tts` tries to build numpy
+# 1.25 from source and dies on the removed `distutils`. The code itself runs
+# fine on NumPy 2.x; the real ceiling is numba's, below. So chatterbox's
+# runtime dependencies are listed here explicitly, from its pyproject at that
+# commit, minus `gradio` (a demo UI it never imports on the Turbo path, and a
+# quarter of the install by itself).
+# ---------------------------------------------------------------------------
 
-# numba (via librosa, via chatterbox) refuses NumPy 2.4+. Without this pin a
-# fresh install resolves to a newer NumPy and every import of the model fails.
-numpy<2.4
-
+# --- mynah ---
 fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.9
 soundfile>=0.12
 imageio-ffmpeg>=0.5
+
+# resemble-perth (the watermarker) imports `pkg_resources`, which setuptools
+# removed in 81 — and uv/venv environments do not ship setuptools at all. It
+# swallows the ImportError and leaves the watermarker as None, so the failure
+# surfaces later as "'NoneType' object is not callable" at model load.
+setuptools<81
+
+# --- chatterbox-tts @ ed27b95, runtime dependencies ---
+# numba (via librosa) refuses NumPy 2.4+; 1.26 is the first with 3.12 wheels.
+numpy>=1.26,<2.4
+librosa==0.11.0
+s3tokenizer
+torch==2.6.0
+torchaudio==2.6.0
+transformers==4.46.3
+diffusers==0.29.0
+resemble-perth==1.0.1
+conformer==0.3.2
+safetensors==0.5.3
+spacy-pkuseg
+pykakasi==2.3.0
+pyloudnorm
+omegaconf
+huggingface-hub

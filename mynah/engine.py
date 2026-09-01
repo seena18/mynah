@@ -1,12 +1,20 @@
 """The TTS model, loaded once and held.
 
-Loading Chatterbox Turbo takes minutes and ~3 GB, so the whole app shares one
-instance behind a lock. Generation is serialised: a Metal or CUDA device has one
-queue anyway, and running two generations at once mostly produces two slow ones.
+Loading Chatterbox Turbo takes a while and ~4.4 GB on the GPU, so the whole app
+shares one instance behind a lock. Generation is serialised: a Metal or CUDA
+device has one queue anyway, and running two generations at once mostly
+produces two slow ones.
+
+Weights come from the Hugging Face Hub anonymously — the repo is public and
+MIT-licensed — or from a folder named by MYNAH_MODEL_DIR for machines that
+cannot reach the Hub. Upstream's own `from_pretrained` is never called: it
+passes `token=True`, which makes huggingface_hub demand a login for a repo
+that needs none.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -15,15 +23,21 @@ from pathlib import Path
 import torch
 
 REPO_ID = "ResembleAI/chatterbox-turbo"
-# The files Turbo's loader actually opens. Upstream's from_pretrained fetches
-# every *.safetensors in the repo, which includes the 1 GB s3gen.safetensors
-# that the Turbo class never reads — a quarter of the first-run download for
-# nothing. Listing the files means a new user downloads ~2.85 GB, not ~3.85.
+MODEL_DIR_ENV = "MYNAH_MODEL_DIR"
+# The files Turbo's loader actually opens. Upstream's loader fetches every
+# *.safetensors in the repo, which includes the 1 GB s3gen.safetensors that the
+# Turbo class never reads — a quarter of the first-run download for nothing.
 MODEL_FILES = [
     "ve.safetensors", "t3_turbo_v1.safetensors", "s3gen_meanflow.safetensors",
     "conds.pt", "tokenizer_config.json", "vocab.json", "merges.txt",
     "special_tokens_map.json", "added_tokens.json",
 ]
+# Sum of MODEL_FILES on the Hub at the pinned revision; used for the progress
+# readout when the Hub cannot be asked for exact sizes.
+EXPECTED_BYTES = 2_987_680_596
+# What upstream's loader would fetch. Only used if a file in MODEL_FILES has
+# been renamed upstream and the narrow download comes back incomplete.
+UPSTREAM_PATTERNS = ["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"]
 
 
 def pick_device() -> str:
@@ -54,20 +68,112 @@ class Params:
         return cls(**known)
 
 
+def _complete(directory: Path) -> bool:
+    return all((directory / name).is_file() for name in MODEL_FILES)
+
+
+def _dir_bytes(directory: Path) -> int:
+    return sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())
+
+
 class Engine:
     def __init__(self) -> None:
         self.device = pick_device()
         self.state = "cold"          # cold | loading | ready | error
         self.error = ""
-        self.loader = ""             # "local" (narrow download) or "upstream"
+        self.loader = ""             # "hub" | "manual" | "hub-broad"
+        self.progress = ""           # human-readable download progress, or ""
         self._model = None
         self._conds_cls = None
         self._lock = threading.RLock()
         self._voice_cache: dict[str, object] = {}
+        self._downloading = False
+
+    # ---- weights ---------------------------------------------------------
+
+    @staticmethod
+    def manual_dir() -> Path | None:
+        """A folder of weights named by MYNAH_MODEL_DIR, if set and complete."""
+        raw = os.environ.get(MODEL_DIR_ENV, "").strip()
+        if not raw:
+            return None
+        directory = Path(raw).expanduser()
+        return directory if _complete(directory) else None
+
+    @staticmethod
+    def cached() -> tuple[Path, int] | None:
+        """Where the weights already are and how big, without touching the
+        network — or None if a download is still ahead."""
+        manual = Engine.manual_dir()
+        if manual:
+            return manual, sum((manual / n).stat().st_size for n in MODEL_FILES)
+        from huggingface_hub import try_to_load_from_cache
+
+        paths = [try_to_load_from_cache(REPO_ID, name) for name in MODEL_FILES]
+        if not all(isinstance(p, str) for p in paths):
+            return None
+        return Path(paths[0]).parent, sum(Path(p).stat().st_size for p in paths)
+
+    def _expected_bytes(self) -> int:
+        try:
+            from huggingface_hub import HfApi
+
+            info = HfApi().model_info(REPO_ID, files_metadata=True)
+            wanted = {s.rfilename: (s.size or 0) for s in info.siblings}
+            total = sum(wanted.get(name, 0) for name in MODEL_FILES)
+            return total or EXPECTED_BYTES
+        except Exception:  # noqa: BLE001 - offline, rate-limited: use the constant
+            return EXPECTED_BYTES
+
+    def _watch_download(self, expected: int, log) -> None:
+        """Report bytes landed in the Hub cache while snapshot_download runs.
+
+        huggingface_hub writes blobs as `<hash>.incomplete` and renames them
+        when done, so the sum of the blobs folder is the honest progress.
+        """
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        blobs = Path(HF_HUB_CACHE) / f"models--{REPO_ID.replace('/', '--')}" / "blobs"
+        last_said = 0.0
+        while self._downloading:
+            done = _dir_bytes(blobs) if blobs.exists() else 0
+            self.progress = (f"downloading weights {min(done, expected) / 1e9:.2f} / "
+                             f"{expected / 1e9:.2f} GB")
+            if log and time.monotonic() - last_said > 5:
+                log(self.progress)
+                last_said = time.monotonic()
+            time.sleep(1.0)
+
+    def download(self, log=None, patterns: list[str] | None = None) -> Path:
+        """Fetch the weights if they are not already here; return their folder.
+
+        Anonymous: the repo is public. A watcher thread fills `self.progress`
+        for the UI, since huggingface_hub's own progress bar is a terminal
+        thing and this app's user is looking at a browser.
+        """
+        manual = self.manual_dir()
+        if manual:
+            return manual
+        from huggingface_hub import snapshot_download
+
+        already = self.cached()
+        if already and patterns is None:
+            return already[0]
+        expected = self._expected_bytes()
+        self._downloading = True
+        threading.Thread(target=self._watch_download, args=(expected, log),
+                         daemon=True).start()
+        try:
+            path = snapshot_download(repo_id=REPO_ID,
+                                     allow_patterns=patterns or MODEL_FILES)
+        finally:
+            self._downloading = False
+            self.progress = ""
+        return Path(path)
 
     # ---- lifecycle -------------------------------------------------------
 
-    def load(self) -> None:
+    def load(self, log=None) -> None:
         """Bring the model up. Safe to call repeatedly; only the first works."""
         with self._lock:
             if self.state in ("ready", "loading"):
@@ -75,26 +181,32 @@ class Engine:
             self.state = "loading"
         try:
             from chatterbox.tts_turbo import ChatterboxTurboTTS, Conditionals
-            from huggingface_hub import snapshot_download
 
-            try:
-                checkpoint = Path(snapshot_download(
-                    repo_id=REPO_ID, allow_patterns=MODEL_FILES))
-                model = ChatterboxTurboTTS.from_local(checkpoint, self.device)
-                loader = "local"
-            except Exception:  # noqa: BLE001 - see below
-                # If upstream renames a file, the explicit list above goes
-                # stale before this code does. Fall back to their loader
-                # rather than fail on a filename.
-                model = ChatterboxTurboTTS.from_pretrained(device=self.device)
-                loader = "upstream"
+            checkpoint = self.download(log=log)
+            loader = "manual" if self.manual_dir() else "hub"
+            if not _complete(checkpoint):
+                # A file in MODEL_FILES has been renamed upstream. Fetch what
+                # their loader would have and try again — still never through
+                # from_pretrained, which insists on a login.
+                checkpoint = self.download(log=log, patterns=UPSTREAM_PATTERNS)
+                loader = "hub-broad"
+            model = ChatterboxTurboTTS.from_local(checkpoint, self.device)
             with self._lock:
                 self._model, self._conds_cls = model, Conditionals
                 self.loader = loader
+                self.progress = ""
                 self.state = "ready"
         except Exception as error:  # noqa: BLE001 - surfaced to the UI verbatim
+            # Name the innermost frame: "'NoneType' object is not callable" on
+            # its own sent a whole debugging session into the wrong library.
+            import traceback
+
+            frame = traceback.extract_tb(error.__traceback__)[-1]
+            where = f"{Path(frame.filename).name}:{frame.lineno} in {frame.name}"
             with self._lock:
-                self.state, self.error = "error", f"{type(error).__name__}: {error}"
+                self.progress = ""
+                self.state = "error"
+                self.error = f"{type(error).__name__}: {error} ({where})"
 
     def warm(self) -> None:
         threading.Thread(target=self.load, daemon=True).start()

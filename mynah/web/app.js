@@ -72,7 +72,11 @@ function apply(state) {
 function renderEngine(engine, queue) {
   const pill = $('engine');
   const label = { cold: 'idle', loading: 'loading model…', ready: 'ready', error: 'error' };
-  pill.textContent = `${label[engine.state] || engine.state} · ${engine.device}`;
+  // A first run downloads ~3 GB before anything can happen; say so, with a
+  // number that moves, instead of "loading" for ten silent minutes.
+  const text = engine.state === 'loading' && engine.progress ? engine.progress
+             : label[engine.state] || engine.state;
+  pill.textContent = `${text} · ${engine.device}`;
   pill.className = 'pill ' + (engine.state === 'ready' ? 'ready'
     : engine.state === 'error' ? 'error' : 'loading');
   pill.title = engine.error || '';

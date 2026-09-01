@@ -168,6 +168,7 @@ class Renderer:
                     "state": ENGINE.state,
                     "device": ENGINE.device,
                     "loader": ENGINE.loader,
+                    "progress": ENGINE.progress,
                     "error": ENGINE.error,
                 },
                 "queue": {
