@@ -66,15 +66,21 @@ function renderVoices(voices, selected) {
         : voice.status === 'error' ? 'failed' : 'compiling…';
       option.value = voice.id;
       option.textContent = `${voice.name} · ${suffix}`;
-      option.disabled = voice.status !== 'ready';
+      // Not disabled: a voice is selected the moment it is uploaded, and a
+      // disabled option cannot show as selected, which made the picker read
+      // "no voice" while its own voice was compiling.
       select.append(option);
     }
     select.value = selected || '';
   }
   const current = voices.find(v => v.id === selected);
   const failed = voices.find(v => v.status === 'error');
+  // Report the selected voice's real state. Saying "ready" just because
+  // something is selected hides the compile step entirely.
   $('voice-hint').textContent = failed ? failed.error
-    : current ? 'ready' : 'needs more than 5 seconds of clear speech';
+    : !current ? 'needs more than 5 seconds of clear speech'
+    : current.status === 'ready' ? `ready · ${current.seconds}s reference`
+    : 'compiling…';
   $('voice-hint').style.color = failed ? 'var(--bad)' : '';
   const preview = $('voice-preview');
   if (current && preview.dataset.voice !== current.id) {

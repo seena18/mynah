@@ -57,6 +57,24 @@ Bind elsewhere with `--host 0.0.0.0 --port 9000`. The default stays on loopback
 on purpose — there is no authentication, so anything that can reach the port can
 use your microphone recordings and your GPU.
 
+### If it does not start
+
+Almost always the wrong interpreter. `python` is whatever your shell resolves it
+to, which on a pyenv or conda machine is frequently not the environment you
+installed into. mynah checks this before doing anything else and, if it can find
+a Python on your machine that does have what it needs, prints the exact command:
+
+```
+mynah needs Python 3.10 or newer, but this is 3.8.11:
+  /Users/you/.pyenv/versions/3.8.11/bin/python3
+
+This one has everything mynah needs:
+  /Users/you/.pyenv/versions/3.12.4/bin/python run.py
+```
+
+It also refuses to start on a port that is already in use, rather than printing
+a URL that goes nowhere.
+
 ## Using it
 
 1. **Voice.** Record straight from the browser, or upload a clip. It needs

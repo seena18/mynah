@@ -122,7 +122,9 @@ class Project:
     def status(self, chunk: Chunk) -> str:
         if not chunk.text.strip():
             return "empty"
-        if not self.voice_id:
+        if not self.voice_id or not (voice_dir(self.voice_id) / "voice.pt").exists():
+            # Either nothing is selected, or the selected voice is still
+            # compiling. Both mean this chunk cannot be rendered yet.
             return "no-voice"
         return "ready" if self.take_path(chunk).exists() else "stale"
 
