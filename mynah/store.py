@@ -1,4 +1,4 @@
-"""The project on disk: chunks, voices, and what has actually been rendered.
+"""Projects on disk: chunks, voices, and what has actually been rendered.
 
 The centre of this file is the fingerprint. A chunk's audio is named after a
 hash of everything that affects how it sounds — its text, the voice, the
@@ -6,6 +6,10 @@ sampling parameters — so a chunk is stale exactly when that hash no longer
 matches the file on disk. That is what lets you re-render one line and keep the
 other forty, and it also means editing a line back to what it was restores the
 old take for free instead of paying for it twice.
+
+Takes and voices are shared across projects for the same reason: the hash does
+not know which project asked, so two projects that speak the same line in the
+same voice share one file.
 """
 
 from __future__ import annotations
@@ -13,6 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -21,13 +27,18 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 TAKES = DATA / "takes"
 VOICES = DATA / "voices"
-PROJECT_FILE = DATA / "project.json"
+PROJECTS = DATA / "projects"
+LEGACY_PROJECT_FILE = DATA / "project.json"     # single-project layout, pre-0.2
 
 DEFAULT_CHUNK_CHARS = 280
 
 
 def new_id() -> str:
     return uuid.uuid4().hex[:10]
+
+
+def now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 # ---- splitting -----------------------------------------------------------
@@ -95,12 +106,15 @@ class Chunk:
 
 @dataclass
 class Project:
+    id: str = field(default_factory=new_id)
     title: str = "Untitled"
     voice_id: str = ""
     params: dict = field(default_factory=lambda: {
         "temperature": 0.8, "top_p": 0.95, "top_k": 1000, "repetition_penalty": 1.2,
     })
     chunks: list[Chunk] = field(default_factory=list)
+    created: str = field(default_factory=now)
+    updated: str = field(default_factory=now)
 
     # -- fingerprinting --
 
@@ -108,7 +122,8 @@ class Project:
         """Everything that changes the audio, and nothing that does not.
 
         `pause_after` is excluded on purpose: silence is added at stitch time,
-        so changing a pause must not invalidate a perfectly good take.
+        so changing a pause must not invalidate a perfectly good take. The
+        project id is excluded too, so identical lines share takes.
         """
         payload = json.dumps(
             {"text": chunk.text.strip(), "voice": self.voice_id, "params": self.params},
@@ -131,7 +146,14 @@ class Project:
     def find(self, chunk_id: str) -> Chunk | None:
         return next((c for c in self.chunks if c.id == chunk_id), None)
 
+    def live_fingerprints(self) -> set[str]:
+        return {self.fingerprint(c) for c in self.chunks if c.text.strip()}
+
     # -- persistence --
+
+    @property
+    def directory(self) -> Path:
+        return PROJECTS / self.id
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -141,21 +163,79 @@ class Project:
         ]
         return data
 
+    def summary(self) -> dict:
+        """What a project list needs, without the chunk bodies."""
+        counts: dict[str, int] = {}
+        for chunk in self.chunks:
+            state = self.status(chunk)
+            counts[state] = counts.get(state, 0) + 1
+        return {"id": self.id, "title": self.title, "updated": self.updated,
+                "created": self.created, "chunks": len(self.chunks), "counts": counts}
+
     def save(self) -> None:
-        PROJECT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        raw = asdict(self)
-        PROJECT_FILE.write_text(json.dumps(raw, indent=2) + "\n")
+        self.updated = now()
+        self.directory.mkdir(parents=True, exist_ok=True)
+        (self.directory / "project.json").write_text(json.dumps(asdict(self), indent=2) + "\n")
 
     @classmethod
-    def load(cls) -> "Project":
-        if not PROJECT_FILE.exists():
-            return cls()
-        raw = json.loads(PROJECT_FILE.read_text())
+    def from_dict(cls, raw: dict) -> "Project":
         fields = Chunk.__dataclass_fields__
         chunks = [Chunk(**{k: v for k, v in c.items() if k in fields})
-                  for c in raw.pop("chunks", [])]
-        known = {k: v for k, v in raw.items() if k in cls.__dataclass_fields__}
+                  for c in raw.get("chunks", [])]
+        known = {k: v for k, v in raw.items()
+                 if k in cls.__dataclass_fields__ and k != "chunks"}
         return cls(**known, chunks=chunks)
+
+    @classmethod
+    def load(cls, project_id: str) -> "Project":
+        path = PROJECTS / project_id / "project.json"
+        if not path.exists():
+            raise KeyError(project_id)
+        project = cls.from_dict(json.loads(path.read_text()))
+        project.id = project_id            # the directory name is authoritative
+        return project
+
+
+# ---- projects ------------------------------------------------------------
+
+def list_projects() -> list[Project]:
+    """Every project on disk, most recently touched first."""
+    if not PROJECTS.exists():
+        return []
+    found = []
+    for directory in PROJECTS.iterdir():
+        if directory.is_dir() and (directory / "project.json").exists():
+            try:
+                found.append(Project.load(directory.name))
+            except (OSError, ValueError, TypeError):
+                continue      # a half-written file must not take the app down
+    return sorted(found, key=lambda p: p.updated, reverse=True)
+
+
+def create_project(title: str = "Untitled") -> Project:
+    project = Project(title=title.strip() or "Untitled")
+    project.save()
+    return project
+
+
+def delete_project(project_id: str) -> None:
+    shutil.rmtree(PROJECTS / project_id, ignore_errors=True)
+
+
+def migrate_legacy() -> Project | None:
+    """Adopt a pre-projects `data/project.json` as the first project.
+
+    Runs at startup, once: the old file is renamed rather than deleted, so a
+    rollback still has it. Nothing happens if projects already exist.
+    """
+    if not LEGACY_PROJECT_FILE.exists() or list_projects():
+        return None
+    raw = json.loads(LEGACY_PROJECT_FILE.read_text())
+    project = Project.from_dict(raw)
+    project.id = new_id()
+    project.save()
+    LEGACY_PROJECT_FILE.rename(LEGACY_PROJECT_FILE.with_suffix(".json.migrated"))
+    return project
 
 
 # ---- voices --------------------------------------------------------------
@@ -177,9 +257,11 @@ def list_voices() -> list[dict]:
     return sorted(voices, key=lambda v: v.get("created", ""), reverse=True)
 
 
-def unused_takes(project: Project) -> list[Path]:
-    """Takes no chunk currently points at — old versions of edited lines."""
+def unused_takes() -> list[Path]:
+    """Takes no chunk in any project points at — old versions of edited lines."""
     if not TAKES.exists():
         return []
-    live = {project.fingerprint(c) for c in project.chunks if c.text.strip()}
+    live: set[str] = set()
+    for project in list_projects():
+        live |= project.live_fingerprints()
     return [p for p in TAKES.glob("*.wav") if p.stem not in live]

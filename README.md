@@ -22,6 +22,8 @@ sounds — its text, the voice, the sampling parameters. So:
   is still there under the same name.
 - The pause after a chunk is *not* part of the hash, since silence is added at
   export time. Retiming costs nothing.
+- Neither is the project. Two projects that speak the same line in the same
+  voice share one file on disk.
 
 There is no "rendered" flag to get out of sync with the disk. The filename is
 the record.
@@ -78,6 +80,9 @@ a URL that goes nowhere.
 
 ## Using it
 
+0. **Project.** The picker in the header lists your projects; `+ New` starts
+   another, the title box renames the current one, `✕` deletes it. The URL
+   carries `?p=<id>`, so a reload or a second tab lands on the same project.
 1. **Voice.** Record straight from the browser, or upload a clip. It needs
    **more than 5 seconds** of clean speech — the timer turns green when you are
    past it. Any format ffmpeg reads will do.
@@ -114,7 +119,10 @@ mynah/
   audio.py    decode, loudness-normalise, stitch
   server.py   HTTP API
   web/        the page
-data/         projects, voices and takes (gitignored)
+data/
+  projects/<id>/project.json   one file per project
+  voices/<id>/                 reference.wav, voice.pt, meta.json
+  takes/<fingerprint>.wav      shared by every project (gitignored, all of it)
 ```
 
 The whole UI reads one `GET /api/state`, polled. There is no client-side copy of
@@ -142,6 +150,9 @@ the project to drift out of sync.
 - **float16 does not work on Metal.** Tried: the model mixes dtypes in at
   least one `add` and MPSGraph aborts the process rather than raising. It
   runs in float32 everywhere.
+- **Upgrading from a single-project `data/project.json`** is automatic: on
+  first start it becomes the first project and the old file is renamed
+  `project.json.migrated`, not deleted.
 - Only one generation runs at a time. A GPU has one queue anyway; running two
   mostly gives you two slow ones.
 

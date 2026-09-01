@@ -4,10 +4,14 @@
  * the project; it renders whatever /api/state last returned. The one concession
  * is that a textarea the user is typing in is left alone until it loses focus,
  * so a poll landing mid-sentence cannot eat the caret.
+ *
+ * Which project is shown lives in the URL (?p=<id>), so a reload — or a second
+ * tab — lands on the same one. Empty means "whichever was touched last".
  */
 
 const $ = (id) => document.getElementById(id);
 let STATE = null;
+let PID = new URLSearchParams(location.search).get('p') || '';
 let rows = new Map();          // chunk id -> row element
 let recorder = null;
 let playing = null;            // the one <audio> allowed to be audible
@@ -17,6 +21,9 @@ let playing = null;            // the one <audio> allowed to be audible
    reads 5.0 can be 4.3 s of audio — which is exactly the failure a user hits.
    Six seconds on the clock keeps a margin the server has never rejected. */
 const MIN_RECORD = 6;
+
+const P = (path = '') => `/api/projects/${PID}${path}`;
+const stateUrl = () => PID ? `/api/state?p=${PID}` : '/api/state';
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -37,7 +44,22 @@ const put = (path, body) => api(path, { method: 'PUT', body: JSON.stringify(body
 function apply(state) {
   if (!state) return;
   STATE = state;
+  if (state.project.id !== PID) {
+    // The server answered with a different project than the page was on —
+    // first load, a new project, or the one we were on was deleted. Adopt it.
+    PID = state.project.id;
+    for (const li of rows.values()) li.remove();
+    rows.clear();
+    if (playing) { playing.pause(); playing = null; }
+  }
+  // Keep the address bar honest on every path, not only when PID changed
+  // here: the picker sets PID before fetching, so a switch made through it
+  // used to leave the URL pointing at the previous project.
+  if (new URLSearchParams(location.search).get('p') !== PID) {
+    history.replaceState(null, '', `?p=${PID}`);
+  }
   renderEngine(state.engine, state.queue);
+  renderProjects(state.projects, state.project.id);
   renderVoices(state.voices, state.project.voice_id);
   renderChunks(state.project);
   renderParams(state.project.params);
@@ -57,6 +79,23 @@ function renderEngine(engine, queue) {
   $('queue').textContent = queue.pending || queue.current
     ? `${queue.pending} queued${queue.current ? ', 1 rendering' : ''}` : '';
   $('stop').disabled = !queue.pending;
+}
+
+function renderProjects(projects, currentId) {
+  const select = $('project-select');
+  const signature = projects.map(p => `${p.id}:${p.title}:${p.chunks}`).join('|') + `#${currentId}`;
+  if (select.dataset.signature === signature) return;
+  select.dataset.signature = signature;
+  select.innerHTML = '';
+  for (const project of projects) {
+    const option = document.createElement('option');
+    option.value = project.id;
+    const ready = project.counts.ready || 0;
+    option.textContent = `${project.title} · ${ready}/${project.chunks}`;
+    select.append(option);
+  }
+  select.value = currentId;
+  $('delete-project').disabled = projects.length < 2;
 }
 
 /* ---- voices ------------------------------------------------------------ */
@@ -106,7 +145,7 @@ function buildRow(chunk) {
   const li = document.createElement('li');
   li.className = 'chunk';
   li.innerHTML = `
-    <span class="n"><span class="dot"></span><br>${''}</span>
+    <span class="n"><span class="dot"></span><br></span>
     <textarea rows="2" spellcheck="false"></textarea>
     <span class="side">
       <span class="row">
@@ -119,13 +158,13 @@ function buildRow(chunk) {
     <span class="err" hidden></span>`;
 
   const text = li.querySelector('textarea');
-  text.addEventListener('change', () => put(`/api/chunks/${chunk.id}`, { text: text.value }).then(apply));
+  text.addEventListener('change', () => put(P(`/chunks/${chunk.id}`), { text: text.value }).then(apply));
   li.querySelector('.pause').addEventListener('change', (event) =>
-    put(`/api/chunks/${chunk.id}`, { pause_after: +event.target.value }).then(apply));
+    put(P(`/chunks/${chunk.id}`), { pause_after: +event.target.value }).then(apply));
   li.querySelector('.regen').addEventListener('click', () =>
-    post(`/api/chunks/${chunk.id}/generate`).then(apply).catch(alert));
+    post(P(`/chunks/${chunk.id}/generate`)).then(apply).catch(alert));
   li.querySelector('.drop').addEventListener('click', () =>
-    api(`/api/chunks/${chunk.id}`, { method: 'DELETE' }).then(apply));
+    api(P(`/chunks/${chunk.id}`), { method: 'DELETE' }).then(apply));
   li.querySelector('.play').addEventListener('click', () => {
     // One take at a time. A second click on the same row stops it; a click
     // on another row swaps to it. Without this, every click layered a new
@@ -135,7 +174,7 @@ function buildRow(chunk) {
       playing.pause(); playing = null;
       if (same) return;
     }
-    const audio = new Audio(`/api/takes/${chunk.id}.wav?v=${li.dataset.fingerprint}`);
+    const audio = new Audio(P(`/takes/${chunk.id}.wav?v=${li.dataset.fingerprint}`));
     audio.dataset.chunk = chunk.id;
     audio.onended = () => { if (playing === audio) playing = null; };
     playing = audio;
@@ -240,7 +279,7 @@ async function sendVoice(file) {
   if (name === '') return;
   const form = new FormData();
   form.append('file', file);
-  const response = await fetch(`/api/voices?name=${encodeURIComponent(name)}`,
+  const response = await fetch(`/api/voices?name=${encodeURIComponent(name)}&p=${PID}`,
     { method: 'POST', body: form });
   if (!response.ok) { alert('upload failed'); return; }
   // The server selects the new voice itself, and puts the previous one back
@@ -250,6 +289,25 @@ async function sendVoice(file) {
 }
 
 /* ---- wiring ------------------------------------------------------------ */
+
+$('project-select').addEventListener('change', async (event) => {
+  PID = event.target.value;
+  apply(await api(stateUrl()));
+});
+$('new-project').addEventListener('click', () => {
+  const title = prompt('Project name', 'Untitled');
+  if (title === null) return;
+  post('/api/projects', { title }).then(apply);
+});
+$('delete-project').addEventListener('click', () => {
+  if (!STATE) return;
+  const n = STATE.project.chunks.length;
+  if (confirm(`Delete "${STATE.project.title}"${n ? ` and its ${n} chunk(s)` : ''}? `
+              + 'Takes shared with other projects are kept.')) {
+    api(P(), { method: 'DELETE' }).then(apply);
+  }
+});
+$('title').addEventListener('change', (event) => post(P(), { title: event.target.value }).then(apply));
 
 $('record').addEventListener('click', () => {
   if (recorder) recorder.stop(); else startRecording().catch(e => alert(`microphone: ${e.message}`));
@@ -261,26 +319,26 @@ $('file').addEventListener('change', (event) => {
 });
 $('delete-voice').addEventListener('click', () => {
   const id = $('voice-select').value;
-  if (id && confirm('Delete this voice?')) api(`/api/voices/${id}`, { method: 'DELETE' }).then(apply);
+  if (id && confirm('Delete this voice? Any project using it will need another.')) {
+    api(`/api/voices/${id}?p=${PID}`, { method: 'DELETE' }).then(apply);
+  }
 });
 $('voice-select').addEventListener('change', (event) =>
-  post('/api/project', { voice_id: event.target.value }).then(apply));
-$('title').addEventListener('change', (event) =>
-  post('/api/project', { title: event.target.value }).then(apply));
+  post(P(), { voice_id: event.target.value }).then(apply));
 
 $('split').addEventListener('click', () => {
   const text = $('script').value.trim();
   if (!text) return;
   if (STATE?.project.chunks.length &&
       !confirm('Replace the current chunks? Takes for identical lines are kept.')) return;
-  post('/api/script/split', { text, max_chars: +$('max-chars').value }).then(apply).catch(e => alert(e.message));
+  post(P('/split'), { text, max_chars: +$('max-chars').value }).then(apply).catch(e => alert(e.message));
 });
-$('add-chunk').addEventListener('click', () => post('/api/chunks', { text: '' }).then(apply));
-$('generate').addEventListener('click', () => post('/api/generate').then(apply));
-$('stop').addEventListener('click', () => post('/api/queue/clear').then(apply));
-$('tidy').addEventListener('click', () => post('/api/tidy').then(apply));
+$('add-chunk').addEventListener('click', () => post(P('/chunks'), { text: '' }).then(apply));
+$('generate').addEventListener('click', () => post(P('/generate')).then(apply));
+$('stop').addEventListener('click', () => post(`/api/queue/clear?p=${PID}`).then(apply));
+$('tidy').addEventListener('click', () => post(`/api/tidy?p=${PID}`).then(apply));
 $('export').addEventListener('click', async () => {
-  const response = await fetch('/api/export.wav');
+  const response = await fetch(P('/export.wav'));
   if (!response.ok) { alert((await response.json()).detail); return; }
   const url = URL.createObjectURL(await response.blob());
   const link = Object.assign(document.createElement('a'), {
@@ -292,12 +350,17 @@ $('export').addEventListener('click', async () => {
 
 for (const key of ['temperature', 'top_p', 'top_k', 'repetition_penalty']) {
   $(`p-${key}`).addEventListener('change', (event) =>
-    post('/api/project', { params: { [key]: +event.target.value } }).then(apply));
+    post(P(), { params: { [key]: +event.target.value } }).then(apply));
 }
 
 /* Poll faster while something is actually happening. */
 async function poll() {
-  try { apply(await api('/api/state')); } catch {}
+  try {
+    apply(await api(stateUrl()));
+  } catch (error) {
+    // A stale ?p= (project deleted elsewhere) must not strand the page.
+    if (PID && /no such project/i.test(error.message)) { PID = ''; }
+  }
   const busy = STATE?.queue.current || STATE?.queue.pending
     || STATE?.engine.state === 'loading'
     || STATE?.voices.some(v => v.status === 'compiling');

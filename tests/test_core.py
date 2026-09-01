@@ -7,6 +7,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 
 import numpy as np
@@ -14,6 +15,34 @@ import soundfile as sf
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from mynah import audio, store  # noqa: E402
+
+
+class Sandbox(unittest.TestCase):
+    """Point every on-disk path at a temp dir for the duration of a test."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.tmp.name)
+        self._saved = (store.DATA, store.TAKES, store.VOICES, store.PROJECTS,
+                       store.LEGACY_PROJECT_FILE)
+        store.DATA = root
+        store.TAKES = root / "takes"
+        store.VOICES = root / "voices"
+        store.PROJECTS = root / "projects"
+        store.LEGACY_PROJECT_FILE = root / "project.json"
+        for path in (store.TAKES, store.VOICES, store.PROJECTS):
+            path.mkdir()
+
+    def tearDown(self):
+        (store.DATA, store.TAKES, store.VOICES, store.PROJECTS,
+         store.LEGACY_PROJECT_FILE) = self._saved
+        self.tmp.cleanup()
+
+    def voice(self, voice_id: str, compiled: bool = True) -> None:
+        directory = store.VOICES / voice_id
+        directory.mkdir(parents=True)
+        if compiled:
+            (directory / "voice.pt").write_bytes(b"x")
 
 
 class Split(unittest.TestCase):
@@ -25,8 +54,7 @@ class Split(unittest.TestCase):
         self.assertEqual(store.split_script("One\nline."), ["One line."])
 
     def test_limit_holds_with_sentences(self):
-        text = "A sentence here. " * 40
-        for chunk in store.split_script(text, 120):
+        for chunk in store.split_script("A sentence here. " * 40, 120):
             self.assertLessEqual(len(chunk), 120)
 
     def test_limit_holds_without_punctuation(self):
@@ -36,16 +64,13 @@ class Split(unittest.TestCase):
             self.assertLessEqual(len(chunk), 100)
 
     def test_greedy_packing_prefers_fewer_chunks(self):
-        # Four 25-char sentences fit two-per-chunk at a 60 limit.
-        text = "Twenty five characters.. " * 4
-        self.assertEqual(len(store.split_script(text, 60)), 2)
+        self.assertEqual(len(store.split_script("Twenty five characters.. " * 4, 60)), 2)
 
     def test_empty(self):
         self.assertEqual(store.split_script(""), [])
         self.assertEqual(store.split_script("  \n\n  "), [])
 
     def test_unsplittable_token_survives(self):
-        # A 300-character word cannot be spoken in pieces; leave it whole.
         self.assertEqual(store.split_script("x" * 300, 50), ["x" * 300])
 
 
@@ -62,10 +87,16 @@ class Fingerprint(unittest.TestCase):
         b = store.Chunk(text="hello", pause_after=2.0)
         self.assertEqual(self.project.fingerprint(a), self.project.fingerprint(b))
 
+    def test_project_identity_excluded(self):
+        # Two projects, same line, same voice: one take on disk serves both.
+        chunk = store.Chunk(text="hello")
+        other = store.Project(voice_id="v1")
+        self.assertNotEqual(self.project.id, other.id)
+        self.assertEqual(self.project.fingerprint(chunk), other.fingerprint(chunk))
+
     def test_whitespace_normalised(self):
-        a = store.Chunk(text="hello")
-        b = store.Chunk(text="  hello \n")
-        self.assertEqual(self.project.fingerprint(a), self.project.fingerprint(b))
+        self.assertEqual(self.project.fingerprint(store.Chunk(text="hello")),
+                         self.project.fingerprint(store.Chunk(text="  hello \n")))
 
     def test_text_voice_params_included(self):
         chunk = store.Chunk(text="hello")
@@ -77,22 +108,12 @@ class Fingerprint(unittest.TestCase):
         self.assertNotEqual(base, other.fingerprint(chunk))
 
 
-class Status(unittest.TestCase):
+class Status(Sandbox):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        root = pathlib.Path(self.tmp.name)
-        self._saved = (store.TAKES, store.VOICES)
-        store.TAKES = root / "takes"
-        store.VOICES = root / "voices"
-        store.TAKES.mkdir()
-        (store.VOICES / "v1").mkdir(parents=True)
-        (store.VOICES / "v1" / "voice.pt").write_bytes(b"x")
-        (store.VOICES / "compiling").mkdir()
+        super().setUp()
+        self.voice("v1")
+        self.voice("compiling", compiled=False)
         self.project = store.Project(voice_id="v1")
-
-    def tearDown(self):
-        store.TAKES, store.VOICES = self._saved
-        self.tmp.cleanup()
 
     def test_empty_text(self):
         self.assertEqual(self.project.status(store.Chunk(text="  ")), "empty")
@@ -118,31 +139,105 @@ class Status(unittest.TestCase):
         chunk.text = "original"
         self.assertEqual(self.project.status(chunk), "ready")
 
-    def test_unused_takes(self):
-        chunk = store.Chunk(text="live")
-        self.project.chunks = [chunk]
-        live = self.project.take_path(chunk)
-        live.write_bytes(b"x")
-        orphan = store.TAKES / "deadbeef.wav"
-        orphan.write_bytes(b"x")
-        self.assertEqual(store.unused_takes(self.project), [orphan])
 
+class Projects(Sandbox):
+    def test_create_list_delete(self):
+        a = store.create_project("Alpha")
+        time.sleep(1.05)                       # `updated` has second resolution
+        b = store.create_project("Bravo")
+        self.assertEqual([p.title for p in store.list_projects()], ["Bravo", "Alpha"])
+        store.delete_project(a.id)
+        self.assertEqual([p.id for p in store.list_projects()], [b.id])
 
-class Load(unittest.TestCase):
-    def test_ignores_unknown_keys(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            saved = store.PROJECT_FILE
-            store.PROJECT_FILE = pathlib.Path(tmp) / "project.json"
-            try:
-                store.PROJECT_FILE.write_text(json.dumps({
-                    "title": "t", "voice_id": "v", "future_field": 1,
-                    "chunks": [{"id": "a", "text": "x", "rendered": "legacy"}],
-                }))
-                project = store.Project.load()
-            finally:
-                store.PROJECT_FILE = saved
+    def test_save_bumps_updated_and_reorders(self):
+        a = store.create_project("Alpha")
+        time.sleep(1.05)
+        store.create_project("Bravo")
+        time.sleep(1.05)
+        a.save()
+        self.assertEqual(store.list_projects()[0].id, a.id)
+
+    def test_load_round_trip(self):
+        project = store.create_project("Round trip")
+        project.voice_id = "v9"
+        project.chunks = [store.Chunk(text="one", pause_after=1.5)]
+        project.save()
+        loaded = store.Project.load(project.id)
+        self.assertEqual(loaded.title, "Round trip")
+        self.assertEqual(loaded.voice_id, "v9")
+        self.assertEqual(loaded.chunks[0].pause_after, 1.5)
+
+    def test_load_unknown_is_keyerror(self):
+        with self.assertRaises(KeyError):
+            store.Project.load("nope")
+
+    def test_from_dict_ignores_unknown_and_legacy_keys(self):
+        project = store.Project.from_dict({
+            "title": "t", "voice_id": "v", "future_field": 1,
+            "chunks": [{"id": "a", "text": "x", "rendered": "legacy"}],
+        })
         self.assertEqual(project.title, "t")
         self.assertEqual(project.chunks[0].text, "x")
+
+    def test_directory_name_is_authoritative(self):
+        project = store.create_project("Moved")
+        # Simulate a copied directory whose file still carries the old id.
+        (store.PROJECTS / "copy").mkdir()
+        (store.PROJECTS / "copy" / "project.json").write_text(
+            (project.directory / "project.json").read_text())
+        self.assertEqual(store.Project.load("copy").id, "copy")
+
+    def test_legacy_migration(self):
+        store.LEGACY_PROJECT_FILE.write_text(json.dumps({
+            "title": "Old single project", "voice_id": "v1",
+            "params": {"temperature": 0.65},
+            "chunks": [{"id": "c1", "text": "kept", "pause_after": 1.5}],
+        }))
+        migrated = store.migrate_legacy()
+        self.assertIsNotNone(migrated)
+        self.assertEqual(migrated.title, "Old single project")
+        # Everything that affects a take's fingerprint must survive, or every
+        # chunk of the migrated project would silently read as stale.
+        self.assertEqual(migrated.voice_id, "v1")
+        self.assertEqual(migrated.params["temperature"], 0.65)
+        self.assertEqual(migrated.chunks[0].text, "kept")
+        self.assertEqual(migrated.chunks[0].pause_after, 1.5)
+        reloaded = store.Project.load(migrated.id)
+        self.assertEqual(reloaded.voice_id, "v1")
+        self.assertFalse(store.LEGACY_PROJECT_FILE.exists())
+        self.assertTrue(store.LEGACY_PROJECT_FILE.with_suffix(".json.migrated").exists())
+        self.assertEqual([p.id for p in store.list_projects()], [migrated.id])
+        # Running again is a no-op: projects exist now.
+        self.assertIsNone(store.migrate_legacy())
+
+    def test_migration_skipped_when_projects_exist(self):
+        store.create_project("Already here")
+        store.LEGACY_PROJECT_FILE.write_text(json.dumps({"title": "old"}))
+        self.assertIsNone(store.migrate_legacy())
+        self.assertTrue(store.LEGACY_PROJECT_FILE.exists())
+
+    def test_unused_takes_spans_all_projects(self):
+        self.voice("v1")
+        a = store.create_project("A")
+        a.voice_id = "v1"
+        a.chunks = [store.Chunk(text="shared line"), store.Chunk(text="only in a")]
+        a.save()
+        b = store.create_project("B")
+        b.voice_id = "v1"
+        b.chunks = [store.Chunk(text="shared line"), store.Chunk(text="only in b")]
+        b.save()
+        for project in (a, b):
+            for chunk in project.chunks:
+                project.take_path(chunk).write_bytes(b"x")
+        # The shared line produced one file, so three takes are live.
+        self.assertEqual(len(list(store.TAKES.glob("*.wav"))), 3)
+        orphan = store.TAKES / "deadbeef.wav"
+        orphan.write_bytes(b"x")
+        self.assertEqual(store.unused_takes(), [orphan])
+        # Deleting B must not orphan the shared take A still uses.
+        store.delete_project(b.id)
+        self.assertEqual({p.name for p in store.unused_takes()},
+                         {orphan.name, b.take_path(b.chunks[1]).name})
 
 
 class Stitch(unittest.TestCase):
@@ -181,8 +276,6 @@ class Stitch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             a, b, out = root / "a.wav", root / "b.wav", root / "out.wav"
-            # 0.3 s of model-style silence around each tone; must not leak
-            # into the gap.
             sf.write(str(a), self._tone(1.0, 0.3, 0.3), self.RATE)
             sf.write(str(b), self._tone(1.0, 0.3, 0.3), self.RATE)
             audio.stitch([(a, 0.5), (b, 0.0)], out, self.RATE)
@@ -190,15 +283,14 @@ class Stitch(unittest.TestCase):
         regions = self._regions(data)
         self.assertEqual(len(regions), 2)
         gap = (regions[1][0] - regions[0][1]) / self.RATE
-        expected = 0.5 + 2 * audio.EDGE_MARGIN
-        self.assertAlmostEqual(gap, expected, delta=0.02)
+        self.assertAlmostEqual(gap, 0.5 + 2 * audio.EDGE_MARGIN, delta=0.02)
 
     def test_loudness_matched_across_takes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             a, b, out = root / "a.wav", root / "b.wav", root / "out.wav"
-            sf.write(str(a), self._tone(1.0, 0.05, 0.1), self.RATE)   # quiet
-            sf.write(str(b), self._tone(1.0, 0.40, 0.1), self.RATE)   # 18 dB louder
+            sf.write(str(a), self._tone(1.0, 0.05, 0.1), self.RATE)
+            sf.write(str(b), self._tone(1.0, 0.40, 0.1), self.RATE)
             audio.stitch([(a, 0.2), (b, 0.0)], out, self.RATE)
             data, _ = sf.read(str(out), dtype="float32")
         regions = self._regions(data)

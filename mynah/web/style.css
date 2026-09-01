@@ -100,3 +100,8 @@ audio { width: 100%; margin-top: 10px; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
 .log { margin: 8px 0 0; font-size: 12px; color: var(--dim); white-space: pre-wrap; max-height: 220px; overflow: auto; }
+
+/* Project picker in the header: keep long titles from pushing the status pill
+   off the right edge. */
+#project-select { max-width: 240px; }
+header { flex-wrap: wrap; }

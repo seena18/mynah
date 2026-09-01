@@ -1,8 +1,12 @@
 """HTTP API and static host.
 
-Deliberately boring: JSON in, JSON out, and the whole UI state comes back from
-one `/api/state` call that the page polls. No websockets, no client-side store
-to drift out of sync with the server's.
+Deliberately boring: JSON in, JSON out, and the whole UI state for one project
+comes back from a single `/api/state?p=<id>` call that the page polls. No
+websockets, no client-side store to drift out of sync with the server's.
+
+Project-scoped routes live under `/api/projects/{pid}/…`. Voices, takes and the
+render queue are global: a voice is not a property of a script, and a take is
+named by content, not by who asked for it.
 """
 
 from __future__ import annotations
@@ -25,10 +29,16 @@ from .jobs import RENDER
 
 WEB = Path(__file__).resolve().parent / "web"
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     store.TAKES.mkdir(parents=True, exist_ok=True)
     store.VOICES.mkdir(parents=True, exist_ok=True)
+    store.PROJECTS.mkdir(parents=True, exist_ok=True)
+    migrated = store.migrate_legacy()
+    if migrated:
+        RENDER.adopt(migrated)
+        RENDER.note(f"migrated the existing project as {migrated.title!r}")
     # Start loading immediately: the first generation should not also be the
     # first three minutes of model load.
     ENGINE.warm()
@@ -38,11 +48,70 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="mynah", lifespan=lifespan)
 
 
-# ---- state ---------------------------------------------------------------
+def _project(project_id: str) -> store.Project:
+    """Resolve a project id from a route, as a 404 rather than a KeyError."""
+    try:
+        return RENDER.get(project_id)
+    except KeyError:
+        raise HTTPException(404, "no such project") from None
+
+
+# ---- state and projects --------------------------------------------------
 
 @app.get("/api/state")
-def get_state() -> dict:
-    return RENDER.snapshot()
+def get_state(p: str = "") -> dict:
+    """One project's full view. Without `p`, the most recently touched one."""
+    if p:
+        _project(p)
+    else:
+        p = RENDER.pick_default()
+    return RENDER.snapshot(p)
+
+
+class NewProjectBody(BaseModel):
+    title: str = "Untitled"
+
+
+@app.post("/api/projects")
+def create_project(body: NewProjectBody) -> dict:
+    project = RENDER.adopt(store.create_project(body.title))
+    RENDER.note(f"new project {project.title!r}")
+    return RENDER.snapshot(project.id)
+
+
+class ProjectBody(BaseModel):
+    title: str | None = None
+    voice_id: str | None = None
+    params: dict | None = None
+
+
+@app.post("/api/projects/{pid}")
+def update_project(pid: str, body: ProjectBody) -> dict:
+    with RENDER.lock:
+        project = _project(pid)
+        if body.title is not None:
+            project.title = body.title.strip() or "Untitled"
+        if body.voice_id is not None:
+            project.voice_id = body.voice_id
+        if body.params is not None:
+            project.params.update(body.params)
+        project.save()
+    return RENDER.snapshot(pid)
+
+
+@app.delete("/api/projects/{pid}")
+def delete_project(pid: str) -> dict:
+    """Remove a project; answer with whichever project should be shown next.
+
+    Its takes stay — another project may share them — until `tidy`.
+    """
+    with RENDER.lock:
+        project = _project(pid)
+        title = project.title
+        RENDER.forget(pid)
+        store.delete_project(pid)
+    RENDER.note(f"deleted project {title!r}")
+    return RENDER.snapshot(RENDER.pick_default())
 
 
 # ---- script and chunks ---------------------------------------------------
@@ -52,8 +121,8 @@ class SplitBody(BaseModel):
     max_chars: int = store.DEFAULT_CHUNK_CHARS
 
 
-@app.post("/api/script/split")
-def split(body: SplitBody) -> dict:
+@app.post("/api/projects/{pid}/split")
+def split(pid: str, body: SplitBody) -> dict:
     """Replace the chunk list from a pasted script.
 
     Existing takes survive this: a chunk is keyed by its fingerprint, so any
@@ -63,10 +132,11 @@ def split(body: SplitBody) -> dict:
     if not pieces:
         raise HTTPException(400, "nothing to split")
     with RENDER.lock:
-        RENDER.project.chunks = [store.Chunk(text=text) for text in pieces]
-        RENDER.project.save()
+        project = _project(pid)
+        project.chunks = [store.Chunk(text=text) for text in pieces]
+        project.save()
     RENDER.note(f"split into {len(pieces)} chunks")
-    return RENDER.snapshot()
+    return RENDER.snapshot(pid)
 
 
 class ChunkBody(BaseModel):
@@ -74,10 +144,20 @@ class ChunkBody(BaseModel):
     pause_after: float | None = None
 
 
-@app.put("/api/chunks/{chunk_id}")
-def edit_chunk(chunk_id: str, body: ChunkBody) -> dict:
+@app.post("/api/projects/{pid}/chunks")
+def add_chunk(pid: str, body: ChunkBody) -> dict:
     with RENDER.lock:
-        chunk = RENDER.project.find(chunk_id)
+        project = _project(pid)
+        project.chunks.append(store.Chunk(text=body.text or ""))
+        project.save()
+    return RENDER.snapshot(pid)
+
+
+@app.put("/api/projects/{pid}/chunks/{chunk_id}")
+def edit_chunk(pid: str, chunk_id: str, body: ChunkBody) -> dict:
+    with RENDER.lock:
+        project = _project(pid)
+        chunk = project.find(chunk_id)
         if chunk is None:
             raise HTTPException(404, "no such chunk")
         if body.text is not None:
@@ -85,54 +165,43 @@ def edit_chunk(chunk_id: str, body: ChunkBody) -> dict:
         if body.pause_after is not None:
             chunk.pause_after = max(0.0, min(10.0, body.pause_after))
         RENDER.errors.pop(chunk_id, None)
-        RENDER.project.save()
-    return RENDER.snapshot()
+        project.save()
+    return RENDER.snapshot(pid)
 
 
-@app.post("/api/chunks")
-def add_chunk(body: ChunkBody) -> dict:
+@app.delete("/api/projects/{pid}/chunks/{chunk_id}")
+def delete_chunk(pid: str, chunk_id: str) -> dict:
     with RENDER.lock:
-        RENDER.project.chunks.append(store.Chunk(text=body.text or ""))
-        RENDER.project.save()
-    return RENDER.snapshot()
+        project = _project(pid)
+        project.chunks = [c for c in project.chunks if c.id != chunk_id]
+        project.save()
+    return RENDER.snapshot(pid)
 
 
-@app.delete("/api/chunks/{chunk_id}")
-def delete_chunk(chunk_id: str) -> dict:
-    with RENDER.lock:
-        RENDER.project.chunks = [c for c in RENDER.project.chunks if c.id != chunk_id]
-        RENDER.project.save()
-    return RENDER.snapshot()
-
-
-@app.post("/api/chunks/{chunk_id}/generate")
-def generate_chunk(chunk_id: str) -> dict:
-    if not RENDER.submit([chunk_id]):
+@app.post("/api/projects/{pid}/chunks/{chunk_id}/generate")
+def generate_chunk(pid: str, chunk_id: str) -> dict:
+    _project(pid)
+    if not RENDER.submit(pid, [chunk_id]):
         raise HTTPException(400, "chunk is unknown or already queued")
-    return RENDER.snapshot()
+    return RENDER.snapshot(pid)
 
 
-@app.post("/api/generate")
-def generate_all() -> dict:
+@app.post("/api/projects/{pid}/generate")
+def generate_all(pid: str) -> dict:
     with RENDER.lock:
-        stale = [c.id for c in RENDER.project.chunks
-                 if RENDER.project.status(c) == "stale"]
-    queued = RENDER.submit(stale)
+        project = _project(pid)
+        stale = [c.id for c in project.chunks if project.status(c) == "stale"]
+    queued = RENDER.submit(pid, stale)
     RENDER.note(f"queued {queued} chunk(s)")
-    return RENDER.snapshot()
+    return RENDER.snapshot(pid)
 
 
-@app.post("/api/queue/clear")
-def clear_queue() -> dict:
-    RENDER.note(f"cleared {RENDER.clear()} queued chunk(s)")
-    return RENDER.snapshot()
-
-
-@app.get("/api/takes/{chunk_id}.wav")
-def take(chunk_id: str):
+@app.get("/api/projects/{pid}/takes/{chunk_id}.wav")
+def take(pid: str, chunk_id: str):
     with RENDER.lock:
-        chunk = RENDER.project.find(chunk_id)
-        path = RENDER.project.take_path(chunk) if chunk else None
+        project = _project(pid)
+        chunk = project.find(chunk_id)
+        path = project.take_path(chunk) if chunk else None
     if path is None or not path.exists():
         raise HTTPException(404, "no take for this chunk yet")
     # The filename is a content hash, so a take never changes under a URL.
@@ -140,30 +209,48 @@ def take(chunk_id: str):
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
-# ---- project settings ----------------------------------------------------
-
-class ProjectBody(BaseModel):
-    title: str | None = None
-    voice_id: str | None = None
-    params: dict | None = None
-
-
-@app.post("/api/project")
-def update_project(body: ProjectBody) -> dict:
+@app.get("/api/projects/{pid}/export.wav")
+def export(pid: str):
     with RENDER.lock:
-        if body.title is not None:
-            RENDER.project.title = body.title
-        if body.voice_id is not None:
-            RENDER.project.voice_id = body.voice_id
-        if body.params is not None:
-            RENDER.project.params.update(body.params)
-        RENDER.project.save()
-    return RENDER.snapshot()
+        project = _project(pid)
+        pieces, missing = [], 0
+        for chunk in project.chunks:
+            if project.status(chunk) == "ready":
+                pieces.append((project.take_path(chunk), chunk.pause_after))
+            elif chunk.text.strip():
+                missing += 1
+        title, target = project.title, project.directory / "export.wav"
+    if missing:
+        raise HTTPException(409, f"{missing} chunk(s) still need generating")
+    audio.stitch(pieces, target, ENGINE.sample_rate)
+    safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in title).strip() or "mynah"
+    return FileResponse(target, media_type="audio/wav", filename=f"{safe}.wav")
+
+
+# ---- global: queue, tidy ---------------------------------------------------
+
+@app.post("/api/queue/clear")
+def clear_queue(p: str = "") -> dict:
+    RENDER.note(f"cleared {RENDER.clear()} queued chunk(s)")
+    return RENDER.snapshot(p or RENDER.pick_default())
+
+
+@app.post("/api/tidy")
+def tidy(p: str = "") -> dict:
+    """Delete takes no chunk in any project points at any more."""
+    with RENDER.lock:
+        orphans = store.unused_takes()
+    freed = sum(path.stat().st_size for path in orphans)
+    for path in orphans:
+        path.unlink(missing_ok=True)
+    RENDER.note(f"removed {len(orphans)} unused take(s), {freed / 1e6:.1f} MB")
+    return RENDER.snapshot(p or RENDER.pick_default())
 
 
 # ---- voices --------------------------------------------------------------
 
-def _compile_voice(voice_id: str, source: Path, name: str, previous: str) -> None:
+def _compile_voice(voice_id: str, source: Path, name: str,
+                   project_id: str, previous: str) -> None:
     directory = store.voice_dir(voice_id)
     meta_path = directory / "meta.json"
 
@@ -195,20 +282,26 @@ def _compile_voice(voice_id: str, source: Path, name: str, previous: str) -> Non
         # The upload selected this voice; a project must not stay pointed at
         # one that never came to exist.
         with RENDER.lock:
-            if RENDER.project.voice_id == voice_id:
-                RENDER.project.voice_id = previous
-                RENDER.project.save()
+            try:
+                project = RENDER.get(project_id)
+            except KeyError:
+                project = None
+            if project is not None and project.voice_id == voice_id:
+                project.voice_id = previous
+                project.save()
     finally:
         source.unlink(missing_ok=True)
 
 
 @app.post("/api/voices")
-async def add_voice(file: UploadFile, name: str = "") -> dict:
+async def add_voice(file: UploadFile, name: str = "", p: str = "") -> dict:
     """Accept an upload or a browser recording and compile it in the background.
 
     Compilation needs the model, which may still be loading on a cold start, so
     this returns immediately and the UI watches for the voice to turn ready.
+    The voice is selected into project `p` straight away.
     """
+    project_id = p or RENDER.pick_default()
     voice_id = store.new_id()
     directory = store.voice_dir(voice_id)
     directory.mkdir(parents=True, exist_ok=True)
@@ -218,24 +311,28 @@ async def add_voice(file: UploadFile, name: str = "") -> dict:
         shutil.copyfileobj(file.file, handle)
     label = name.strip() or Path(file.filename or "voice").stem or "voice"
     with RENDER.lock:
-        previous = RENDER.project.voice_id
-        RENDER.project.voice_id = voice_id
-        RENDER.project.save()
-    threading.Thread(target=_compile_voice, args=(voice_id, source, label, previous),
+        project = _project(project_id)
+        previous = project.voice_id
+        project.voice_id = voice_id
+        project.save()
+    threading.Thread(target=_compile_voice,
+                     args=(voice_id, source, label, project_id, previous),
                      daemon=True).start()
-    return RENDER.snapshot()
+    return RENDER.snapshot(project_id)
 
 
 @app.delete("/api/voices/{voice_id}")
-def delete_voice(voice_id: str) -> dict:
+def delete_voice(voice_id: str, p: str = "") -> dict:
     directory = store.voice_dir(voice_id)
     ENGINE.forget_voice(directory / "voice.pt")
     shutil.rmtree(directory, ignore_errors=True)
+    # Any project that pointed at it now points at nothing, on disk too.
     with RENDER.lock:
-        if RENDER.project.voice_id == voice_id:
-            RENDER.project.voice_id = ""
-            RENDER.project.save()
-    return RENDER.snapshot()
+        for project in RENDER.all_projects():
+            if project.voice_id == voice_id:
+                RENDER.adopt(project).voice_id = ""
+                project.save()
+    return RENDER.snapshot(p or RENDER.pick_default())
 
 
 @app.get("/api/voices/{voice_id}/reference.wav")
@@ -244,38 +341,6 @@ def voice_reference(voice_id: str):
     if not path.exists():
         raise HTTPException(404, "no reference audio")
     return FileResponse(path, media_type="audio/wav")
-
-
-# ---- export --------------------------------------------------------------
-
-@app.get("/api/export.wav")
-def export():
-    with RENDER.lock:
-        pieces, missing = [], 0
-        for chunk in RENDER.project.chunks:
-            if RENDER.project.status(chunk) == "ready":
-                pieces.append((RENDER.project.take_path(chunk), chunk.pause_after))
-            elif chunk.text.strip():
-                missing += 1
-        title = RENDER.project.title
-    if missing:
-        raise HTTPException(409, f"{missing} chunk(s) still need generating")
-    target = store.DATA / "export.wav"
-    audio.stitch(pieces, target, ENGINE.sample_rate)
-    safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in title).strip() or "mynah"
-    return FileResponse(target, media_type="audio/wav", filename=f"{safe}.wav")
-
-
-@app.post("/api/tidy")
-def tidy() -> dict:
-    """Delete takes no chunk points at any more."""
-    with RENDER.lock:
-        orphans = store.unused_takes(RENDER.project)
-    freed = sum(p.stat().st_size for p in orphans)
-    for path in orphans:
-        path.unlink(missing_ok=True)
-    RENDER.note(f"removed {len(orphans)} unused take(s), {freed / 1e6:.1f} MB")
-    return RENDER.snapshot()
 
 
 @app.exception_handler(RuntimeError)
