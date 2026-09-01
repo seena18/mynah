@@ -1,0 +1,13 @@
+# Chatterbox Turbo lives on the repo's main branch, not on PyPI, so this pins
+# the commit that introduced it rather than a release number.
+chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox@ed27b95
+
+# numba (via librosa, via chatterbox) refuses NumPy 2.4+. Without this pin a
+# fresh install resolves to a newer NumPy and every import of the model fails.
+numpy<2.4
+
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.9
+soundfile>=0.12
+imageio-ffmpeg>=0.5
