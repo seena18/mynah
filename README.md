@@ -9,8 +9,9 @@ whole take.
 Runs entirely on your own machine. Nothing is uploaded anywhere; there is no
 account, no API key, and no login to the model host.
 
-[Full demo with sound (~40s)](docs/demo.mp4) — writing a script, generating,
-listening back, then changing one line and re-rolling only that line.
+[Full demo with sound (~1 min)](docs/demo.mp4) — recording a voice, writing a
+script, generating, listening back, then changing one line and re-rolling only
+that line.
 
 ## Quick start
 
@@ -303,17 +304,25 @@ python run.py                          # in one terminal
 uv run --group dev tools/demo.py       # in another
 ```
 
-Nothing in it is staged. It clicks through a live server, waits on real
-generation, and the audio in the video is the WAV that run actually exported.
+Nothing in it is staged. It clicks through a live server, records and compiles
+a voice, waits on real generation, and both things you hear are real: the
+reference the app stored when it recorded, and the WAV that run actually
+exported afterwards.
+
+The one simulated part is the microphone. Headless Chromium has none, so it is
+given a WAV file to use as one (`--mic FILE`, defaulting to an existing voice's
+reference). Everything downstream of that is the real capture path — the app
+records it, uploads it, compiles it, and the rest of the demo speaks in the
+voice it just made, which it then deletes along with the project.
 What is added is presentation: headless Chromium draws no cursor, so one is
 injected into the page along with the captions, and the stretches where the
 machine is only thinking are timelapsed — by however much it takes to get each
 down to a few seconds, so the demo is the same length on a fast machine and a
 slow one. Everything else is real time.
 
-It runs on a scratch project and deletes it afterwards, along with only the
-takes no other project shares, so your own work is untouched and the next run
-still has something real to generate.
+It runs on a scratch project and deletes it afterwards, along with the voice it
+recorded and only the takes no other project shares, so your own work is
+untouched and the next run still has something real to generate.
 
 ## Tests
 

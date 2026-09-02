@@ -36,6 +36,11 @@ EDITED = "No account, no API key, and not one byte leaves the room."
 # Seconds each timelapsed stretch of waiting is compressed to.
 TIMELAPSE_TARGET = 4.5
 
+# The record beat. Past MIN_RECORD (6s in the page) the timer turns green; a
+# little beyond that leaves the shot time to read.
+RECORD_SECONDS = 8.5
+VOICE_NAME = "My voice"
+
 
 # ---- the overlay ---------------------------------------------------------
 # Injected into the page rather than composited afterwards, so it is captured
@@ -171,6 +176,21 @@ def api(url: str, path: str, method: str = "GET", body: dict | None = None) -> d
         return json.loads(response.read() or b"{}")
 
 
+def prepare_mic(source: pathlib.Path, target: pathlib.Path) -> pathlib.Path:
+    """Turn a reference recording into something Chromium can use as a mic.
+
+    --use-file-for-fake-audio-capture wants 16-bit PCM. Chromium's capture path
+    also applies its own gain — measured at about 3x, which took a peak of 0.6
+    to 1.02 and clipped it — so the level is taken down first. What the app
+    stores is loudness-normalised anyway, so only the clipping matters.
+    """
+    subprocess.run(
+        [ffmpeg(), "-y", "-v", "error", "-i", str(source), "-ac", "1",
+         "-ar", "48000", "-af", "volume=0.4", "-c:a", "pcm_s16le", str(target)],
+        check=True)
+    return target
+
+
 def clear_own_takes(url: str, pid: str) -> int:
     """Delete the takes this demo project produced, unless another project
     shares them.
@@ -203,19 +223,25 @@ def clear_own_takes(url: str, pid: str) -> int:
     return removed
 
 
-def run(url: str, out_dir: pathlib.Path, keep_project: bool) -> dict:
+def run(url: str, out_dir: pathlib.Path, keep_project: bool,
+        mic_source: pathlib.Path | None) -> dict:
     from playwright.sync_api import sync_playwright
 
     state = api(url, "/api/state")
-    ready = [v for v in state["voices"] if v["status"] == "ready"]
-    if not ready:
-        raise SystemExit("no compiled voice — record or upload one first")
-    voice = ready[0]
+    if mic_source is None:
+        ready = [v for v in state["voices"] if v["status"] == "ready"]
+        if not ready:
+            raise SystemExit(
+                "nothing to feed the microphone with. Pass --mic FILE, or "
+                "record a voice in the app first so its reference can be used.")
+        mic_source = ROOT / "data" / "voices" / ready[0]["id"] / "reference.wav"
+        print(f"microphone fed from the {ready[0]['name']!r} reference")
+    if not mic_source.exists():
+        raise SystemExit(f"no such file: {mic_source}")
 
     project = api(url, "/api/projects", "POST", {"title": "Demo"})["project"]
     pid = project["id"]
-    api(url, f"/api/projects/{pid}", "POST", {"voice_id": voice["id"]})
-    print(f"demo project {pid} using voice {voice['name']!r}")
+    print(f"demo project {pid}")
 
     raw = out_dir / "raw"
     if raw.exists():
@@ -224,15 +250,26 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool) -> dict:
     wav = raw / "demo.wav"
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(args=["--force-color-profile=srgb"])
+        mic = prepare_mic(mic_source, raw / "mic.wav")
+        browser = playwright.chromium.launch(args=[
+            "--force-color-profile=srgb",
+            # The record beat is a real recording: Chromium takes this file as
+            # the microphone, so the app captures, uploads and compiles it the
+            # way it would any take from a real mic.
+            "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream",
+            f"--use-file-for-fake-audio-capture={mic}%noloop",
+        ])
         t0 = time.monotonic()
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
+            permissions=["microphone"],
             record_video_dir=str(raw),
             record_video_size={"width": 1280, "height": 800},
         )
         page = context.new_page()
         stage = Stage(page, t0)
+        voice_id = ""
         try:
             page.goto(f"{url}/?p={pid}", wait_until="networkidle")
             page.evaluate(OVERLAY_JS)
@@ -241,10 +278,34 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool) -> dict:
 
             stage.caption("mynah — voice cloning TTS that runs on your machine", 2600)
 
-            # --- voices ---
-            stage.caption("Voices are cloned from a few seconds of speech")
+            # --- voices: a real recording, through a simulated microphone ---
+            stage.caption("Clone a voice from a few seconds of your own speech")
             stage.click("#open-voices", after=900)
-            page.wait_for_timeout(1800)
+            page.once("dialog", lambda dialog: dialog.accept(VOICE_NAME))
+            stage.click("#record", after=0)
+            stage.mark("record_start")
+            page.wait_for_timeout(1500)
+            stage.caption("The timer goes green once there is enough to work with")
+            page.wait_for_timeout(int(RECORD_SECONDS * 1000) - 1500)
+            stage.click("#record", after=500)          # stop
+            stage.mark("record_end")
+
+            compiling = stage.at()
+            stage.caption("It compiles once; every line after this reuses it")
+            # Grab the id as soon as the upload lands, not after it compiles:
+            # the voice exists from that moment, and a failure in between has
+            # to be able to clean it up.
+            page.wait_for_function(
+                "() => typeof STATE !== 'undefined' && STATE && STATE.project.voice_id",
+                timeout=120000)
+            voice_id = page.evaluate("() => STATE.project.voice_id")
+            page.wait_for_function(
+                "() => { if (typeof STATE === 'undefined' || !STATE) return false;"
+                "        const v = STATE.voices.find(v => v.id === STATE.project.voice_id);"
+                "        return v && v.status === 'ready'; }",
+                timeout=300000)
+            stage.timelapse(compiling)
+            page.wait_for_timeout(900)
             stage.click("#voices-drawer [data-close]", after=700)
 
             # --- script ---
@@ -335,21 +396,31 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool) -> dict:
             if not keep_project:
                 clear_own_takes(url, pid)
                 api(url, f"/api/projects/{pid}", "DELETE")
-                print(f"run failed — removed demo project {pid}")
+                if voice_id:
+                    api(url, f"/api/voices/{voice_id}", "DELETE")
+                print(f"run failed — removed demo project {pid} and its voice")
             raise
         finally:
             context.close()
             browser.close()
 
     video = next(raw.glob("*.webm"))
-    result = {"video": str(video), "wav": str(wav), "marks": stage.marks,
-              "fast": stage.fast, "pid": pid}
+    # What the app stored for the voice it just compiled is exactly what the
+    # microphone fed it, so that is what plays over the record beat.
+    recorded = raw / "recorded.wav"
+    with urllib.request.urlopen(f"{url}/api/voices/{voice_id}/reference.wav",
+                                timeout=120) as response:
+        recorded.write_bytes(response.read())
+    result = {"video": str(video), "wav": str(wav), "recorded": str(recorded),
+              "marks": stage.marks, "fast": stage.fast, "pid": pid,
+              "voice_id": voice_id}
     print(json.dumps({k: v for k, v in result.items() if k != "video"}, indent=2))
 
     if not keep_project:
         freed = clear_own_takes(url, pid)
         api(url, f"/api/projects/{pid}", "DELETE")
-        print(f"deleted demo project {pid} and {freed} take(s) only it used")
+        api(url, f"/api/voices/{voice_id}", "DELETE")
+        print(f"deleted demo project {pid}, its voice, and {freed} take(s) only it used")
     return result
 
 
@@ -423,27 +494,51 @@ def build(result: dict, out_dir: pathlib.Path) -> pathlib.Path:
     listing = work / "concat.txt"
     listing.write_text("".join(f"file '{p.name}'\n" for p in pieces))
 
-    # Every timelapse before the preview removes wall-clock time; the audio has
-    # to slide back by exactly as much or it drifts off the picture.
-    removed = sum((e - s) * (1 - 1 / f) for s, e, f in fast if e <= marks["preview_start"])
-    delay = max(0.0, marks["preview_start"] - removed)
+    def placed(mark: str) -> float:
+        """Where a moment that happened at `mark` ends up in the finished cut.
+
+        Every timelapse before it removed wall-clock time, so the audio has to
+        slide back by exactly as much or it drifts off the picture.
+        """
+        removed = sum((e - s) * (1 - 1 / f) for s, e, f in fast if e <= marks[mark])
+        return max(0.0, marks[mark] - removed)
+
+    # Two things are audible: the voice going in during the record beat, and
+    # the clone of it reading new lines during the preview.
+    sources, filters, mixed = [], [], []
+    heard = result.get("recorded")
+    if heard and "record_start" in marks:
+        at = placed("record_start")
+        span = marks.get("record_end", marks["record_start"]) - marks["record_start"]
+        sources += ["-i", heard]
+        filters.append(f"[{len(mixed) + 1}:a]atrim=0:{span:.2f},asetpts=PTS-STARTPTS,"
+                       f"adelay={int(at * 1000)}|{int(at * 1000)}[a{len(mixed)}]")
+        mixed.append(f"[a{len(mixed)}]")
+        print(f"  recording audible at {at:.1f}s for {span:.1f}s")
+    at = placed("preview_start")
+    sources += ["-i", result["wav"]]
+    filters.append(f"[{len(mixed) + 1}:a]adelay={int(at * 1000)}|{int(at * 1000)}[a{len(mixed)}]")
+    mixed.append(f"[a{len(mixed)}]")
+    print(f"  generated mix audible at {at:.1f}s")
+
+    # normalize=0: amix halves every input otherwise, and these never overlap.
+    filters.append("".join(mixed) + f"amix=inputs={len(mixed)}:normalize=0[a]")
 
     mp4 = out_dir / "demo.mp4"
     subprocess.run([
         ffmpeg(), "-y", "-v", "error",
-        "-f", "concat", "-safe", "0", "-i", str(listing),
-        "-i", result["wav"],
-        "-af", f"adelay={int(delay * 1000)}|{int(delay * 1000)}",
-        # No -shortest: the audio is ~6s of speech placed 23s in, and it would
-        # otherwise cut the video off there, losing every beat after the
-        # preview — including the edit-one-line one, which is the point.
+        "-f", "concat", "-safe", "0", "-i", str(listing), *sources,
+        "-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[a]",
+        # No -shortest: the speech is a few seconds placed well into the
+        # timeline, and it would otherwise cut the video off there, losing
+        # every beat after it — including edit-one-line, which is the point.
         "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
         "-movflags", "+faststart", str(mp4),
     ], check=True)
-    print(f"wrote {mp4}  ({mp4.stat().st_size / 1e6:.1f} MB, audio at {delay:.1f}s)")
+    print(f"wrote {mp4}  ({mp4.stat().st_size / 1e6:.1f} MB)")
 
     # A README wants a short silent loop, not the whole thing.
-    gif_start = max(0.0, delay - 1.0)
+    gif_start = max(0.0, placed("preview_start") - 1.0)
     gif_len = min(11.0, marks["preview_end"] - marks["preview_start"] + 2.0)
     palette = work / "palette.png"
     subprocess.run([ffmpeg(), "-y", "-v", "error", "-ss", f"{gif_start:.2f}", "-t", f"{gif_len:.2f}",
@@ -464,6 +559,10 @@ def main() -> int:
     parser.add_argument("--out", type=pathlib.Path, default=DOCS)
     parser.add_argument("--keep-project", action="store_true",
                         help="leave the demo project behind for inspection")
+    parser.add_argument("--mic", type=pathlib.Path,
+                        help="audio played into the browser's fake microphone "
+                             "during the record beat; defaults to an existing "
+                             "voice's reference")
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -474,7 +573,7 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    result = run(args.url, args.out, args.keep_project)
+    result = run(args.url, args.out, args.keep_project, args.mic)
     (args.out / "raw" / "marks.json").write_text(
         json.dumps({"marks": result["marks"], "fast": result["fast"]}, indent=2) + "\n")
     build(result, args.out)
