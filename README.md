@@ -116,6 +116,8 @@ where you were.
    needs **more than 5 seconds** of clean speech, and the timer turns green
    when you are past it. Each voice is a card: rename it in place, preview the
    reference, *Use in this project*. Voices are shared by every project.
+   From a long recording, use `tools/voice_from_media.py` instead of uploading
+   the whole thing — see below for why that matters.
 2. **Script.** *Paste script…* opens a sheet. Blank lines become line breaks;
    anything longer than the character limit is split at sentence ends. Or add
    lines one at a time with *+ Line*.
@@ -266,6 +268,31 @@ This one has everything mynah needs:
 
 It also refuses to start on a port that is already in use, rather than printing
 a URL that goes nowhere. `uv run run.py` sidesteps all of this.
+
+## Taking a voice out of a long recording
+
+The model reads only the **first 10 seconds** of a reference (15 for its
+tokenizer) and discards the rest. Hand it an hour-long file and the clone is
+built from whatever is at the very start — an intro, a breath, dead air. So
+pick the window deliberately:
+
+```bash
+uv run tools/voice_from_media.py long-recording.m4a --name "Me"
+```
+
+It decodes any format ffmpeg reads (video included), scores the file for
+continuous unclipped speech, snaps the start onto a pause so the sample does
+not open mid-word, and uploads just that clip. On a file that is already
+wall-to-wall clean speech it barely beats taking the first 16 seconds (90% vs
+86% voiced). On a realistic one — dead air, then a loud sting, then the
+speaker — it is the difference between a reference that is 53% speech and 44%
+clipped, and one that is 91% speech and 0.1% clipped. A clipped reference
+bakes that distortion into every line the voice ever says.
+
+Add `--write clip.wav` to hear the choice before committing to it.
+
+Clone your own voice, or one you have permission to use — see *Clone
+responsibly* below.
 
 ## The demo
 
