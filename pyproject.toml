@@ -14,6 +14,10 @@ dependencies = [
   "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox@ed27b95",
   # numba (via librosa, via chatterbox) refuses NumPy 2.4+.
   "numpy>=1.26,<2.4",
+  # Declared directly (chatterbox pins them anyway) so the Windows CUDA index
+  # source below applies — uv sources only bind to direct dependencies.
+  "torch==2.6.0",
+  "torchaudio==2.6.0",
   # resemble-perth imports pkg_resources, gone from setuptools 81; without
   # this the watermarker is silently None and model load fails.
   "setuptools<81",
@@ -22,6 +26,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   "soundfile>=0.12",
   "imageio-ffmpeg>=0.5",
+  # Faster Hub downloads; without it huggingface_hub warns on every file.
+  "hf_xet",
 ]
 
 [project.urls]
@@ -36,3 +42,15 @@ override-dependencies = [
   "numpy>=1.26,<2.4",
   "gradio; python_version < '3'",
 ]
+
+# PyPI's Windows torch wheel is CPU-only. On Linux the PyPI wheel already
+# bundles CUDA, so the PyTorch index is used for Windows alone; everything
+# else keeps resolving from PyPI. Verified on an RTX 4080 SUPER.
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu124", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu124", marker = "sys_platform == 'win32'" }]

@@ -72,13 +72,33 @@ the record.
 - ~4 GB free disk: 3 GB of weights plus the Python environment
 - 16 GB RAM is comfortable, 8 GB is not — the model takes ~4.4 GB on the GPU
   while generating
-- Apple silicon (Metal), an NVIDIA GPU (CUDA), or CPU if you are patient.
-  Tested on an M1 Pro; Linux + CUDA should work; Windows is untested.
+- Apple silicon (Metal), an NVIDIA GPU (CUDA), or CPU if you are patient —
+  see *Platforms* below for what was actually measured.
 
 The model is [Chatterbox Turbo](https://github.com/resemble-ai/chatterbox) by
 Resemble AI — a 302M-parameter transformer with a 266M vocoder, ~746M total,
 MIT-licensed like its code. `ffmpeg` is bundled through `imageio-ffmpeg`, so
 there is nothing to install with a package manager.
+
+## Platforms
+
+Each row is a fresh `git clone` and the quick start above, with an empty model
+cache, on real hardware. "Per chunk" is a ~3-second line of speech.
+
+| Platform | Install, incl. 3 GB weights | Model load | Per chunk | Peak GPU memory |
+|---|---|---|---|---|
+| macOS, M1 Pro 16 GB (Metal) | 91 s | ~25 s | 5–12 s | 4.4 GB |
+| WSL2 Ubuntu 22.04, RTX 4080 SUPER (CUDA) | 161 s | 8 s | 0.4–1.0 s | 4.8 GB |
+| Windows 11, RTX 4080 SUPER (CUDA) | 100 s, + 60 s for the CUDA torch | 10 s | 0.5–1.0 s | 4.8 GB |
+
+- **Windows gets CUDA through the PyTorch index**, not PyPI — PyPI's Windows
+  torch wheel is CPU-only. `uv run` does this by itself (see
+  `[tool.uv.sources]` in `pyproject.toml`); with pip, run the one extra line
+  noted in `requirements.txt` first.
+- **Linux needs nothing extra**: the PyPI wheel already bundles CUDA. Inside
+  WSL2 the GPU is visible as long as the Windows NVIDIA driver is installed;
+  no CUDA toolkit in the distro is required.
+- **CPU-only** is untested and will be slow — expect minutes per chunk.
 
 ## Using it
 

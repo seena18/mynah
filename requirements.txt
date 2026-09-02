@@ -13,8 +13,16 @@
 # quarter of the install by itself).
 # ---------------------------------------------------------------------------
 
+# Windows + NVIDIA: PyPI's Windows torch is CPU-only. Run this *first*, then
+# the two steps above; pip keeps the CUDA build since the version matches:
+#
+#   pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+#
+# Linux and macOS need nothing extra. (`uv run` handles this automatically.)
+
 # --- mynah ---
 fastapi>=0.115
+hf_xet
 uvicorn[standard]>=0.32
 python-multipart>=0.0.9
 soundfile>=0.12
