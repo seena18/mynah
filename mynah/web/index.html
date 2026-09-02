@@ -59,6 +59,14 @@
   <button id="activity-toggle" class="ghost small">Activity</button>
   <span class="grow"></span>
   <span id="counts" class="muted"></span>
+  <button id="preview-open" class="btn" title="Play the full stitched mix in your browser">▶ Preview</button>
+  <div id="preview-active" class="preview-active" hidden>
+    <audio id="preview-audio" preload="none"></audio>
+    <button id="preview-play" class="ghost icon" title="Play/pause">▶</button>
+    <input id="preview-seek" class="seek" type="range" min="0" max="1" step="0.01" value="0">
+    <span id="preview-time" class="mono small muted">0:00 / 0:00</span>
+    <button id="preview-close" class="ghost icon" title="Close preview">✕</button>
+  </div>
   <button id="export" class="btn">Export WAV</button>
 </footer>
 

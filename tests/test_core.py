@@ -322,12 +322,22 @@ class Stitch(unittest.TestCase):
             a, b, out = root / "a.wav", root / "b.wav", root / "out.wav"
             sf.write(str(a), self._tone(1.0, 0.3, 0.3), self.RATE)
             sf.write(str(b), self._tone(1.0, 0.3, 0.3), self.RATE)
-            audio.stitch([(a, 0.5), (b, 0.0)], out, self.RATE)
+            segments = audio.stitch([(a, 0.5), (b, 0.0)], out, self.RATE)
             data, _ = sf.read(str(out), dtype="float32")
         regions = self._regions(data)
         self.assertEqual(len(regions), 2)
         gap = (regions[1][0] - regions[0][1]) / self.RATE
         self.assertAlmostEqual(gap, 0.5 + 2 * audio.EDGE_MARGIN, delta=0.02)
+
+        # The returned segments are what the UI highlights during playback.
+        # Check them against stitch()'s own offset bookkeeping, not against
+        # loud-region detection: a segment's edges deliberately include a
+        # near-silent EDGE_MARGIN, so the "loud" envelope is shorter than the
+        # segment on purpose — that is not a bug to assert against here.
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0]["start"], 0.0)
+        self.assertAlmostEqual(segments[1]["start"] - segments[0]["end"], 0.5, delta=0.005)
+        self.assertAlmostEqual(segments[1]["end"], len(data) / self.RATE, delta=0.005)
 
     def test_loudness_matched_across_takes(self):
         with tempfile.TemporaryDirectory() as tmp:

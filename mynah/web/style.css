@@ -68,6 +68,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
+.btn.recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+.muted.bad { color: var(--bad); }
 .ghost { background: transparent; border: 1px solid transparent; padding: 7px 10px; color: var(--muted); }
 .ghost:hover:not(:disabled) { color: var(--text); background: var(--raise); }
 .ghost.danger:hover:not(:disabled) { color: var(--bad); }
@@ -193,6 +195,30 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
 }
 .activity pre { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; }
 
+/* ---- stitched playback -------------------------------------------------- */
+/* Custom transport rather than <audio controls>: the native widget renders
+   as a wide, browser-chrome-styled pill (volume slider, overflow menu) that
+   sits oddly against this page's own controls. A play button, a slider and a
+   time readout cover what stitched playback needs and match everything else
+   in the footer. */
+.preview-active { display: flex; align-items: center; gap: 8px; }
+.preview-active audio { display: none; }
+.seek {
+  width: 140px; height: 4px; -webkit-appearance: none; appearance: none;
+  background: var(--line-strong); border-radius: 2px; border: none; padding: 0;
+}
+.seek::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; margin-top: -4px;
+}
+.seek::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: none; cursor: pointer; }
+.seek::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line-strong); }
+.seek::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line-strong); }
+
+/* The line currently sounding during stitched playback. */
+.chunk.now-playing { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+.chunk.now-playing .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+
 /* ---- narrow ---------------------------------------------------------------- */
 @media (max-width: 760px) {
   .bar { flex-wrap: wrap; height: auto; min-height: var(--bar-h); padding: 8px 12px; row-gap: 6px; gap: 8px; }
@@ -206,4 +232,6 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
   .chunk .side { grid-column: 2; justify-content: flex-end; }
   #counts { display: none; }
   .activity { bottom: 0; }
+  .seek { width: 90px; }
+  #preview-time { display: none; }
 }

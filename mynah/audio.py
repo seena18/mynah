@@ -149,12 +149,18 @@ def _match_loudness(pieces: list, rate: int) -> list:
     return out
 
 
-def stitch(pieces: list[tuple[Path, float]], target: Path, sample_rate: int) -> Path:
+def stitch(pieces: list[tuple[Path, float]], target: Path, sample_rate: int) -> list[dict]:
     """Concatenate rendered chunks, inserting each one's trailing pause.
 
     Pauses are silence written here rather than asked of the model. A pause
     spoken by the model costs a separate generation, and every generation break
     restarts the prosody — which is what makes stitched narration sound choppy.
+
+    Returns each piece's (start, end) in the mix, in seconds, in the same order
+    as `pieces` — the UI uses this to highlight the line currently playing
+    during stitched playback. It comes from here, not a separate estimate,
+    because trimming above already changed each take's length and only this
+    function knows by how much.
     """
     import numpy as np
 
@@ -170,14 +176,20 @@ def stitch(pieces: list[tuple[Path, float]], target: Path, sample_rate: int) -> 
 
     takes = [_fade(t, sample_rate) for t in _match_loudness(takes, sample_rate)]
     parts: list = []
+    segments: list[dict] = []
+    offset = 0.0
     for data, pause in zip(takes, pauses):
         parts.append(data)
+        end = offset + len(data) / sample_rate
+        segments.append({"start": round(offset, 3), "end": round(end, 3)})
+        offset = end
         if pause > 0:
             parts.append(np.zeros(int(pause * sample_rate), dtype="float32"))
+            offset += pause
     mixed = np.concatenate(parts)
     peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
     if peak > 0.99:
         mixed *= 0.99 / peak
     target.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(target), mixed, sample_rate)
-    return target
+    return segments

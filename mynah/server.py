@@ -209,22 +209,67 @@ def take(pid: str, chunk_id: str):
                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
+def _gather_pieces(project: store.Project) -> list[tuple[Path, float]]:
+    """Ready takes for a project's lines, in order, with their trailing pause.
+
+    Raises 409 if any non-empty line still needs generating — shared by every
+    route that produces a stitched mix, so export, preview and the timeline
+    can never disagree about whether the project is ready to render.
+    """
+    pieces, missing = [], 0
+    for chunk in project.chunks:
+        if project.status(chunk) == "ready":
+            pieces.append((project.take_path(chunk), chunk.pause_after))
+        elif chunk.text.strip():
+            missing += 1
+    if missing:
+        raise HTTPException(409, f"{missing} chunk(s) still need generating")
+    return pieces
+
+
 @app.get("/api/projects/{pid}/export.wav")
 def export(pid: str):
     with RENDER.lock:
         project = _project(pid)
-        pieces, missing = [], 0
-        for chunk in project.chunks:
-            if project.status(chunk) == "ready":
-                pieces.append((project.take_path(chunk), chunk.pause_after))
-            elif chunk.text.strip():
-                missing += 1
+        pieces = _gather_pieces(project)
         title, target = project.title, project.directory / "export.wav"
-    if missing:
-        raise HTTPException(409, f"{missing} chunk(s) still need generating")
     audio.stitch(pieces, target, ENGINE.sample_rate)
     safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in title).strip() or "mynah"
     return FileResponse(target, media_type="audio/wav", filename=f"{safe}.wav")
+
+
+@app.get("/api/projects/{pid}/preview.wav")
+def preview(pid: str):
+    """The same stitched mix as export, for <audio src=...> rather than a
+    download — no filename means no Content-Disposition, and the response is
+    never cached, so a line regenerated after the last preview is heard."""
+    with RENDER.lock:
+        project = _project(pid)
+        pieces = _gather_pieces(project)
+        target = project.directory / "export.wav"
+    audio.stitch(pieces, target, ENGINE.sample_rate)
+    response = FileResponse(target, media_type="audio/wav")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/projects/{pid}/timeline")
+def timeline(pid: str) -> dict:
+    """Where each line lands in the stitched mix, so the page can highlight
+    the one currently playing. Stitches independently of `preview.wav` —
+    a second pass over a handful of short WAV files is cheap, and it keeps
+    this endpoint correct on its own rather than depending on call order."""
+    with RENDER.lock:
+        project = _project(pid)
+        pieces = _gather_pieces(project)
+        ready_ids = [c.id for c in project.chunks if project.status(c) == "ready"]
+        target = project.directory / "export.wav"
+    segments = audio.stitch(pieces, target, ENGINE.sample_rate)
+    duration = segments[-1]["end"] if segments else 0.0
+    return {
+        "duration": duration,
+        "segments": [{"id": cid, **seg} for cid, seg in zip(ready_ids, segments)],
+    }
 
 
 # ---- global: queue, tidy ---------------------------------------------------

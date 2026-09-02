@@ -19,6 +19,8 @@ const rows = new Map();        // chunk id -> row element
 const cards = new Map();       // voice id -> card element
 let recorder = null;
 let playing = null;            // the one <audio> allowed to be audible
+let previewLoading = false;    // guards the Preview button's disabled state
+                                // against being clobbered by the next poll
 
 /* The model refuses a reference under 5 s of audio. The browser drops a few
    hundred ms between start() and the first captured sample, so a timer that
@@ -62,6 +64,7 @@ function apply(state) {
     for (const li of rows.values()) li.remove();
     rows.clear();
     if (playing) { playing.pause(); playing = null; }
+    closePreview();
   }
   if (new URLSearchParams(location.search).get('p') !== PID) {
     history.replaceState(null, '', `?p=${PID}`);
@@ -239,6 +242,9 @@ function buildRow(chunk) {
   li.querySelector('.drop').addEventListener('click', () =>
     del(P(`/chunks/${chunk.id}`)).then(apply).catch(fail));
   li.querySelector('.play').addEventListener('click', () => {
+    // Only one audible thing at a time — a chunk take and the stitched
+    // preview compete for the same "what am I listening to" slot.
+    if (!previewAudio.paused) previewAudio.pause();
     if (playing) {
       const same = playing.dataset.chunk === chunk.id;
       playing.pause(); playing = null;
@@ -264,7 +270,11 @@ function renderChunks(project) {
     if (li.parentNode !== list || list.children[index] !== li) {
       list.insertBefore(li, list.children[index] || null);
     }
-    li.className = `chunk s-${chunk.status}`;
+    // now-playing is owned by highlightPlayingLine(), which only touches the
+    // DOM when the playing segment actually changes — an unconditional reset
+    // here would erase it on every poll tick and never get a chance to
+    // reapply, since from the highlighter's perspective nothing changed.
+    li.className = `chunk s-${chunk.status}${li.classList.contains('now-playing') ? ' now-playing' : ''}`;
     li.dataset.fingerprint = chunk.fingerprint;
     li.querySelector('.idx').textContent = index + 1;
     li.querySelector('.n').title = chunk.status;
@@ -289,7 +299,12 @@ function renderChunks(project) {
   const count = $('stale-count');
   count.hidden = !(tally.stale > 0);
   count.textContent = tally.stale || '';
-  $('export').disabled = !(tally.ready > 0) || !!(tally.stale || tally.queued || tally.rendering);
+  const canRender = (tally.ready > 0) && !(tally.stale || tally.queued || tally.rendering);
+  $('export').disabled = !canRender;
+  // Not disabled outright while a preview is already loading — openPreview()
+  // owns that state until its own canplay/error fires, or the next poll
+  // (which runs every 700ms-2.5s) would flip the button back on mid-fetch.
+  if (!previewLoading) $('preview-open').disabled = !canRender;
 }
 
 function renderParams(params) {
@@ -392,6 +407,102 @@ $('upload').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', (event) => {
   if (event.target.files[0]) sendVoice(event.target.files[0]);
   event.target.value = '';
+});
+
+/* ---- stitched playback -------------------------------------------------- */
+/* The same mix Export downloads, played in the page. `/timeline` says where
+   each line lands in it, so the line currently sounding can be highlighted —
+   the point of doing this here rather than just linking to the WAV. */
+
+const previewAudio = $('preview-audio');
+let timelineSegments = [];     // [{id, start, end}], seconds, from /timeline
+let lastHighlighted = null;    // chunk id, so timeupdate only touches the DOM on change
+
+function formatTime(seconds) {
+  seconds = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function highlightPlayingLine() {
+  const t = previewAudio.currentTime;
+  const segment = timelineSegments.find(s => t >= s.start && t < s.end);
+  const id = segment ? segment.id : null;
+  if (id === lastHighlighted) return;
+  lastHighlighted = id;
+  for (const [chunkId, li] of rows) li.classList.toggle('now-playing', chunkId === id);
+  if (id) rows.get(id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+async function openPreview() {
+  if (previewLoading) return;
+  previewLoading = true;
+  $('preview-open').disabled = true;
+  $('preview-open').textContent = 'Loading…';
+  // Stitched playback and chunk playback are still only one audible thing.
+  if (playing) { playing.pause(); playing = null; }
+  try {
+    timelineSegments = (await api(P('/timeline'))).segments;
+  } catch (error) {
+    timelineSegments = [];     // still play — just no line highlight
+  }
+  previewAudio.src = P('/preview.wav');
+  previewAudio.load();
+}
+
+function closePreview() {
+  previewLoading = false;
+  previewAudio.pause();
+  previewAudio.removeAttribute('src');
+  previewAudio.load();
+  timelineSegments = [];
+  lastHighlighted = null;
+  for (const li of rows.values()) li.classList.remove('now-playing');
+  $('preview-active').hidden = true;
+  $('preview-open').hidden = false;
+  $('preview-open').disabled = false;
+  $('preview-open').textContent = '▶ Preview';
+  $('preview-seek').value = 0;
+  $('preview-time').textContent = '0:00 / 0:00';
+}
+
+previewAudio.addEventListener('canplay', () => {
+  if (!previewLoading) return;         // a stray event after closePreview()
+  previewLoading = false;
+  $('preview-open').hidden = true;
+  $('preview-active').hidden = false;
+  previewAudio.play().catch(fail);
+});
+previewAudio.addEventListener('error', () => {
+  if (!previewLoading) return;
+  previewLoading = false;
+  $('preview-open').disabled = false;
+  $('preview-open').textContent = '▶ Preview';
+  toast('preview failed — try Export instead');
+});
+previewAudio.addEventListener('play', () => {
+  if (playing) { playing.pause(); playing = null; }
+  $('preview-play').textContent = '⏸';
+});
+previewAudio.addEventListener('pause', () => { $('preview-play').textContent = '▶'; });
+previewAudio.addEventListener('ended', () => { lastHighlighted = null; highlightPlayingLine(); });
+previewAudio.addEventListener('timeupdate', () => {
+  $('preview-time').textContent = `${formatTime(previewAudio.currentTime)} / ${formatTime(previewAudio.duration)}`;
+  if (previewAudio.duration) $('preview-seek').value = previewAudio.currentTime / previewAudio.duration;
+  highlightPlayingLine();
+});
+previewAudio.addEventListener('loadedmetadata', () => {
+  $('preview-time').textContent = `${formatTime(previewAudio.currentTime)} / ${formatTime(previewAudio.duration)}`;
+});
+
+$('preview-open').addEventListener('click', openPreview);
+$('preview-close').addEventListener('click', closePreview);
+$('preview-play').addEventListener('click', () => {
+  if (previewAudio.paused) previewAudio.play().catch(fail); else previewAudio.pause();
+});
+$('preview-seek').addEventListener('input', () => {
+  if (previewAudio.duration) previewAudio.currentTime = +$('preview-seek').value * previewAudio.duration;
 });
 
 /* ---- wiring ------------------------------------------------------------ */
