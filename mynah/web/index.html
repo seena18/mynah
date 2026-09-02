@@ -8,85 +8,135 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <h1>mynah</h1>
-  <select id="project-select" title="Switch project"></select>
-  <button id="new-project" class="btn quiet" title="New project">+ New</button>
-  <button id="delete-project" class="btn quiet" title="Delete this project">✕</button>
-  <input id="title" class="title" placeholder="Untitled" spellcheck="false" title="Rename this project">
+
+<header class="bar top">
+  <span class="brand">mynah</span>
+  <span class="sep"></span>
+  <div class="project">
+    <select id="project-select" title="Switch project"></select>
+    <input id="title" class="title" placeholder="Untitled" spellcheck="false" title="Rename project">
+    <button id="new-project" class="ghost" title="New project">+ New</button>
+    <button id="delete-project" class="ghost danger icon" title="Delete this project">✕</button>
+  </div>
   <span class="grow"></span>
+  <button id="open-voices" class="ghost" title="Manage voices (shared by all projects)">
+    Voices <span id="voice-badge" class="badge" hidden></span>
+  </button>
+  <button id="open-settings" class="ghost icon" title="Sampling &amp; maintenance">⚙</button>
   <span id="engine" class="pill">starting…</span>
 </header>
 
 <main>
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Voice</h2>
-      <span id="voice-hint" class="hint">needs more than 5 seconds of clear speech</span>
-    </div>
-    <div class="voice-row">
-      <select id="voice-select"><option value="">— no voice —</option></select>
-      <button id="record" class="btn">● Record</button>
-      <button id="upload" class="btn">Upload</button>
-      <button id="delete-voice" class="btn quiet" title="Delete selected voice">✕</button>
-      <input id="file" type="file" accept="audio/*,video/webm" hidden>
-      <span id="rec-timer" class="timer" hidden>0.0s</span>
-    </div>
-    <p id="rec-note" class="hint pad" hidden></p>
-    <audio id="voice-preview" controls hidden></audio>
-  </section>
+  <div class="toolbar">
+    <label class="field">
+      <span class="label">Voice</span>
+      <select id="voice-select"><option value="">— none —</option></select>
+    </label>
+    <span id="voice-hint" class="muted"></span>
+    <span class="grow"></span>
+    <button id="paste-script" class="btn">Paste script…</button>
+    <button id="add-chunk" class="ghost">+ Line</button>
+  </div>
 
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Script</h2>
-      <span class="hint">blank lines become chunk breaks</span>
-    </div>
-    <textarea id="script" rows="7" spellcheck="false"
-      placeholder="Paste your script here.&#10;&#10;A blank line starts a new chunk. Long paragraphs are split at sentence ends."></textarea>
-    <div class="voice-row">
-      <button id="split" class="btn primary">Split into chunks</button>
-      <label class="hint">max chars
-        <input id="max-chars" type="number" value="280" min="60" max="900" step="20">
-      </label>
-      <span class="grow"></span>
-      <button id="add-chunk" class="btn quiet">+ chunk</button>
-    </div>
-  </section>
+  <ol id="chunks" class="chunks"></ol>
 
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Chunks</h2>
-      <span id="counts" class="hint"></span>
+  <div id="empty" class="empty">
+    <div class="empty-mark"></div>
+    <h2>Nothing here yet</h2>
+    <p>Paste a script and split it into lines, or add a line by hand.
+       Each line is generated on its own, so fixing one never touches the rest.</p>
+    <div class="row center">
+      <button class="btn primary" data-open-script>Paste script…</button>
+      <button class="ghost" data-add-chunk>+ Add a line</button>
     </div>
-    <ol id="chunks" class="chunks"></ol>
-    <p id="empty" class="hint pad">No chunks yet — paste a script above and split it.</p>
-  </section>
-
-  <details class="panel">
-    <summary>Sampling &amp; maintenance</summary>
-    <div class="voice-row wrap">
-      <label class="hint">temperature <input id="p-temperature" type="number" step="0.05" min="0.05" max="1.5"></label>
-      <label class="hint">top_p <input id="p-top_p" type="number" step="0.01" min="0.1" max="1"></label>
-      <label class="hint">top_k <input id="p-top_k" type="number" step="50" min="1" max="4000"></label>
-      <label class="hint">rep. penalty <input id="p-repetition_penalty" type="number" step="0.05" min="1" max="3"></label>
-      <button id="tidy" class="btn quiet">Delete unused takes</button>
-    </div>
-    <p class="hint pad">Changing any of these makes every chunk stale — they are part of a take's fingerprint.</p>
-  </details>
-
-  <details class="panel">
-    <summary>Activity</summary>
-    <pre id="log" class="log"></pre>
-  </details>
+  </div>
 </main>
 
-<footer>
-  <button id="generate" class="btn primary">Generate stale chunks</button>
-  <button id="stop" class="btn quiet">Stop queue</button>
-  <span id="queue" class="hint"></span>
+<footer class="bar bottom">
+  <button id="generate" class="btn primary">Generate<span id="stale-count" class="count" hidden></span></button>
+  <button id="stop" class="ghost">Stop</button>
+  <span id="queue" class="muted mono"></span>
+  <button id="activity-toggle" class="ghost small">Activity</button>
   <span class="grow"></span>
+  <span id="counts" class="muted"></span>
   <button id="export" class="btn">Export WAV</button>
 </footer>
+
+<div id="activity" class="activity" hidden><pre id="log"></pre></div>
+
+<!-- Paste-script sheet -->
+<div id="script-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="script-title">
+  <div class="sheet">
+    <header>
+      <h2 id="script-title">Paste script</h2>
+      <span class="muted">A blank line starts a new chunk. Longer paragraphs split at sentence ends.</span>
+      <span class="grow"></span>
+      <button class="ghost icon" data-close title="Close">✕</button>
+    </header>
+    <textarea id="script" rows="14" spellcheck="false"
+      placeholder="Paste your script here…"></textarea>
+    <footer>
+      <label class="field inline">
+        <span class="label">Max chars</span>
+        <input id="max-chars" type="number" value="280" min="60" max="900" step="20">
+      </label>
+      <span class="muted">Longer chunks sound smoother — prosody restarts at every boundary.</span>
+      <span class="grow"></span>
+      <button class="ghost" data-close>Cancel</button>
+      <button id="split" class="btn primary">Split into chunks</button>
+    </footer>
+  </div>
+</div>
+
+<!-- Voices drawer -->
+<aside id="voices-drawer" class="drawer" hidden aria-label="Voices">
+  <header>
+    <h2>Voices</h2>
+    <span class="muted">shared by every project</span>
+    <span class="grow"></span>
+    <button class="ghost icon" data-close title="Close">✕</button>
+  </header>
+  <div class="drawer-actions">
+    <button id="record" class="btn">● Record</button>
+    <button id="upload" class="btn">Upload…</button>
+    <input id="file" type="file" accept="audio/*,video/webm" hidden>
+    <span id="rec-timer" class="timer mono" hidden>0.0s</span>
+    <span class="grow"></span>
+    <span class="muted small">needs &gt; 5 s of clean speech</span>
+  </div>
+  <p id="rec-note" class="note" hidden></p>
+  <ul id="voice-list" class="voice-list"></ul>
+  <div id="voices-empty" class="empty small">
+    <h2>No voices yet</h2>
+    <p>Record a few sentences, or upload a clip. Anything ffmpeg can read works.</p>
+  </div>
+</aside>
+
+<!-- Settings drawer -->
+<aside id="settings-drawer" class="drawer" hidden aria-label="Sampling and maintenance">
+  <header>
+    <h2>Sampling</h2>
+    <span class="muted">for this project</span>
+    <span class="grow"></span>
+    <button class="ghost icon" data-close title="Close">✕</button>
+  </header>
+  <div class="settings">
+    <label class="field row"><span class="label">Temperature</span><input id="p-temperature" type="number" step="0.05" min="0.05" max="1.5"></label>
+    <label class="field row"><span class="label">Top-p</span><input id="p-top_p" type="number" step="0.01" min="0.1" max="1"></label>
+    <label class="field row"><span class="label">Top-k</span><input id="p-top_k" type="number" step="50" min="1" max="4000"></label>
+    <label class="field row"><span class="label">Repetition penalty</span><input id="p-repetition_penalty" type="number" step="0.05" min="1" max="3"></label>
+    <p class="muted small">Changing any of these makes every chunk stale — they are part of a take's fingerprint.</p>
+  </div>
+  <header class="sub"><h2>Maintenance</h2></header>
+  <div class="settings">
+    <div class="row">
+      <button id="tidy" class="ghost">Delete unused takes</button>
+      <span class="muted small">Old versions of edited lines, from every project.</span>
+    </div>
+  </div>
+</aside>
+
+<div id="backdrop" class="backdrop" hidden></div>
 
 <script src="/app.js"></script>
 </body>

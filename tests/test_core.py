@@ -140,6 +140,37 @@ class Status(Sandbox):
         self.assertEqual(self.project.status(chunk), "ready")
 
 
+class Voices(Sandbox):
+    def _meta(self, voice_id: str, **fields) -> None:
+        directory = store.VOICES / voice_id
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "meta.json").write_text(json.dumps(
+            {"id": voice_id, "name": "orig", "created": "2026-01-01T00:00:00",
+             "status": "ready", "seconds": 12.0, **fields}))
+
+    def test_rename_keeps_everything_else(self):
+        self._meta("v1")
+        meta = store.rename_voice("v1", "  Narrator  ")
+        self.assertEqual(meta["name"], "Narrator")
+        self.assertEqual(meta["seconds"], 12.0)
+        self.assertEqual(store.list_voices()[0]["name"], "Narrator")
+
+    def test_rename_blank_keeps_old_name(self):
+        self._meta("v1")
+        self.assertEqual(store.rename_voice("v1", "   ")["name"], "orig")
+
+    def test_rename_unknown_is_keyerror(self):
+        with self.assertRaises(KeyError):
+            store.rename_voice("nope", "x")
+
+    def test_list_marks_ready_by_compiled_file(self):
+        self._meta("v1")
+        self._meta("v2")
+        (store.VOICES / "v1" / "voice.pt").write_bytes(b"x")
+        ready = {v["id"]: v["ready"] for v in store.list_voices()}
+        self.assertEqual(ready, {"v1": True, "v2": False})
+
+
 class Projects(Sandbox):
     def test_create_list_delete(self):
         a = store.create_project("Alpha")

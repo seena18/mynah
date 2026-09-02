@@ -257,6 +257,18 @@ def list_voices() -> list[dict]:
     return sorted(voices, key=lambda v: v.get("created", ""), reverse=True)
 
 
+def rename_voice(voice_id: str, name: str) -> dict:
+    """Change a voice's display name. The id, and every project's reference to
+    it, stay as they are — a name is a label, not an identity."""
+    meta_path = voice_dir(voice_id) / "meta.json"
+    if not meta_path.exists():
+        raise KeyError(voice_id)
+    meta = json.loads(meta_path.read_text())
+    meta["name"] = name.strip() or meta.get("name") or "voice"
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
 def unused_takes() -> list[Path]:
     """Takes no chunk in any project points at — old versions of edited lines."""
     if not TAKES.exists():

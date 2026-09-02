@@ -321,6 +321,19 @@ async def add_voice(file: UploadFile, name: str = "", p: str = "") -> dict:
     return RENDER.snapshot(project_id)
 
 
+class VoiceBody(BaseModel):
+    name: str
+
+
+@app.put("/api/voices/{voice_id}")
+def rename_voice(voice_id: str, body: VoiceBody, p: str = "") -> dict:
+    try:
+        store.rename_voice(voice_id, body.name)
+    except KeyError:
+        raise HTTPException(404, "no such voice") from None
+    return RENDER.snapshot(p or RENDER.pick_default())
+
+
 @app.delete("/api/voices/{voice_id}")
 def delete_voice(voice_id: str, p: str = "") -> dict:
     directory = store.voice_dir(voice_id)

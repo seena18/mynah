@@ -102,21 +102,32 @@ cache, on real hardware. "Per chunk" is a ~3-second line of speech.
 
 ## Using it
 
-0. **Project.** The picker in the header lists your projects; `+ New` starts
+The page is the list of lines. Everything else opens over it and closes back to
+where you were.
+
+0. **Project.** The picker in the header switches projects; `+ New` starts
    another, the title box renames the current one, `✕` deletes it. The URL
    carries `?p=<id>`, so a reload or a second tab lands on the same project.
-1. **Voice.** Record straight from the browser, or upload a clip. It needs
-   **more than 5 seconds** of clean speech — the timer turns green when you are
-   past it. Any format ffmpeg reads will do.
-2. **Script.** Paste it and press *Split into chunks*. Blank lines become chunk
-   breaks; anything longer than the character limit is split at sentence ends.
-3. **Generate.** *Generate stale chunks* queues everything unrendered. ↻ on a
-   row re-rolls just that row — useful when a take is fine except for one word.
-4. **Export.** Stitches the takes together with each chunk's trailing pause and
+1. **Voice.** *Voices* in the header (or *Manage voices…* in the picker) opens
+   the voices drawer. Record straight from the browser or upload a clip — it
+   needs **more than 5 seconds** of clean speech, and the timer turns green
+   when you are past it. Each voice is a card: rename it in place, preview the
+   reference, *Use in this project*. Voices are shared by every project.
+2. **Script.** *Paste script…* opens a sheet. Blank lines become line breaks;
+   anything longer than the character limit is split at sentence ends. Or add
+   lines one at a time with *+ Line*.
+3. **Generate.** *Generate* (or `⌘`/`Ctrl` + `Enter`) queues every line that is
+   stale. ↻ on a line re-rolls just that line — for when a take is fine except
+   for one word. Hover a line to see its controls.
+4. **Export.** Stitches the takes together with each line's trailing pause and
    downloads a WAV. At this step each take is trimmed of the model's own
    leading and trailing silence, loudness-matched to the others, and given an
    8 ms fade at each end — so a 0.4 s pause is 0.4 s, and takes that came out
    a couple of dB apart do not announce the join.
+
+Sampling parameters live behind ⚙; *Activity* in the footer shows the log.
+
+![voices drawer](docs/screenshot-voices.png)
 
 ### Getting output that does not sound choppy
 
