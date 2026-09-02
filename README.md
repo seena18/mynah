@@ -142,6 +142,38 @@ before. Two consequences worth knowing:
 
 Use the per-chunk pause for real beats between ideas, not for breath.
 
+## Speed, honestly
+
+Measured on the RTX 4080 SUPER, one ~6-second line, warm:
+
+| Stage | Time | Share |
+|---|---|---|
+| Transformer decode (one step per speech token) | 0.86 s | 89 % |
+| Vocoder | 0.09 s | 9 % |
+| Watermark, file write | 0.01 s | 1 % |
+| **Total** | **0.97 s** | 6× realtime |
+
+The decode is bound by per-step launch overhead, not arithmetic. Two things
+that sound like they should help were measured and do not:
+
+- **Mixed precision** — bf16 and fp16 autocast both run *slower* (1.20 s and
+  1.24 s): casting adds per-op overhead to a loop that is already
+  overhead-bound. On Metal, `.half()` aborts the process outright.
+- **A second model instance** — two generating at once each take 2.0 s.
+  Aggregate throughput is unchanged; one decode already saturates the GPU.
+
+What actually saves time:
+
+- **The take cache.** A line whose text, voice and parameters have not changed
+  is never regenerated. This is the single largest saving in real use.
+- **Longer lines.** Every line pays the fixed cost of a fresh decode; fewer
+  lines is faster *and* smoother.
+- **Stop that stops.** *Stop* aborts the line being generated at its next
+  decode step, not after the line completes.
+- **Hardware.** The 4080 SUPER is roughly ten times an M1 Pro per line. On
+  Apple silicon, generation also suffers badly when the machine is swapping —
+  a 4.4 GB model paged in and out turned an 11 s decode into 45 s here.
+
 ## Where things live
 
 ```

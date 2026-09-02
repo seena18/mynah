@@ -231,7 +231,8 @@ def export(pid: str):
 
 @app.post("/api/queue/clear")
 def clear_queue(p: str = "") -> dict:
-    RENDER.note(f"cleared {RENDER.clear()} queued chunk(s)")
+    dropped, stopping = RENDER.clear()
+    RENDER.note(("stopping the current line; " if stopping else "") + f"cleared {dropped} queued")
     return RENDER.snapshot(p or RENDER.pick_default())
 
 

@@ -86,11 +86,17 @@ class Renderer:
             self.wake.notify_all()
             return queued
 
-    def clear(self) -> int:
+    def clear(self) -> tuple[int, bool]:
+        """Drop everything queued and stop the line in flight.
+
+        Returns (queued lines dropped, whether a running one was stopped)."""
         with self.lock:
             dropped = len(self.pending)
             self.pending.clear()
-            return dropped
+            stopping = self.current is not None
+            if stopping:
+                ENGINE.cancel()
+            return dropped, stopping
 
     def note(self, message: str) -> None:
         self.log.append(f"{time.strftime('%H:%M:%S')}  {message}")
@@ -137,6 +143,14 @@ class Renderer:
                 # satisfies, so if the text changed mid-render this file simply
                 # becomes an orphan and the chunk stays stale. Self-correcting.
                 self.note(f"done in {time.time() - started:.1f}s")
+            except RuntimeError as error:
+                if str(error) == "stopped":
+                    # Not a failure: the user asked. The line simply stays stale.
+                    self.note(f"stopped: {text[:56]}")
+                else:
+                    with self.lock:
+                        self.errors[chunk_id] = f"RuntimeError: {error}"
+                    self.note(f"failed: {error}"[:130])
             except Exception as error:  # noqa: BLE001 - shown in the UI
                 message = f"{type(error).__name__}: {error}"
                 with self.lock:

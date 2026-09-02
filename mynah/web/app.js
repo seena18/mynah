@@ -92,7 +92,8 @@ function renderEngine(engine, queue) {
       ? `${queue.current ? 'rendering' : ''}${queue.current && queue.pending ? ' · ' : ''}${queue.pending ? `${queue.pending} queued` : ''}`
       : '';
   }
-  $('stop').disabled = !queue.pending;
+  // Stop aborts the line being rendered as well as clearing the queue.
+  $('stop').disabled = !queue.pending && !queue.current;
 }
 
 function renderProjects(projects, currentId) {

@@ -271,6 +271,19 @@ class Projects(Sandbox):
                          {orphan.name, b.take_path(b.chunks[1]).name})
 
 
+@unittest.skipUnless(__import__("importlib").util.find_spec("torch"), "engine imports torch")
+class CancelGuard(unittest.TestCase):
+    def test_guard_passes_through_until_cancelled(self):
+        from mynah.engine import Cancelled, guard
+        calls, flag = [], {"stop": False}
+        step = guard(lambda x: calls.append(x) or x * 2, lambda: flag["stop"])
+        self.assertEqual(step(3), 6)
+        flag["stop"] = True
+        with self.assertRaises(Cancelled):
+            step(4)
+        self.assertEqual(calls, [3])          # the cancelled step never ran
+
+
 class Stitch(unittest.TestCase):
     RATE = 24000
 

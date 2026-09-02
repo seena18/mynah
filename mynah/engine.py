@@ -40,6 +40,25 @@ EXPECTED_BYTES = 2_987_680_596
 UPSTREAM_PATTERNS = ["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"]
 
 
+class Cancelled(Exception):
+    """Raised inside the model's decode loop when the current line was stopped."""
+
+
+def guard(forward, is_cancelled):
+    """Wrap a per-step call so a pending stop is honoured at the next step.
+
+    Upstream's decode loop is a plain Python loop that calls the transformer
+    once per token with no hook for interruption. Checking a flag before each
+    call costs nothing measurable and makes Stop land within one step — ~6 ms
+    on a 4080, ~100 ms on Metal — instead of after the whole line.
+    """
+    def guarded(*args, **kwargs):
+        if is_cancelled():
+            raise Cancelled()
+        return forward(*args, **kwargs)
+    return guarded
+
+
 def pick_device() -> str:
     if torch.backends.mps.is_available():
         return "mps"
@@ -88,6 +107,7 @@ class Engine:
         self._lock = threading.RLock()
         self._voice_cache: dict[str, object] = {}
         self._downloading = False
+        self._cancel = False
 
     # ---- weights ---------------------------------------------------------
 
@@ -191,6 +211,7 @@ class Engine:
                 checkpoint = self.download(log=log, patterns=UPSTREAM_PATTERNS)
                 loader = "hub-broad"
             model = ChatterboxTurboTTS.from_local(checkpoint, self.device)
+            model.t3.tfmr.forward = guard(model.t3.tfmr.forward, lambda: self._cancel)
             with self._lock:
                 self._model, self._conds_cls = model, Conditionals
                 self.loader = loader
@@ -270,19 +291,34 @@ class Engine:
 
     # ---- generation ------------------------------------------------------
 
+    def cancel(self) -> None:
+        """Stop the line being generated. Deliberately lock-free: the worker
+        holds the engine lock for the whole generation, and this is called from
+        the request thread while it does."""
+        self._cancel = True
+
     def speak(self, text: str, voice_pt: Path, params: Params) -> torch.Tensor:
-        """One chunk of text to a (1, samples) waveform on the CPU."""
+        """One chunk of text to a (1, samples) waveform on the CPU.
+
+        Raises RuntimeError("stopped") if cancel() was called while it ran; a
+        half-generated line is not worth keeping, so nothing is returned.
+        """
         with self._lock:
             model = self._require()
             self._use_voice(voice_pt)
-            return model.generate(
-                text,
-                temperature=params.temperature,
-                top_p=params.top_p,
-                top_k=params.top_k,
-                repetition_penalty=params.repetition_penalty,
-                audio_prompt_path=None,
-            )
+            try:
+                return model.generate(
+                    text,
+                    temperature=params.temperature,
+                    top_p=params.top_p,
+                    top_k=params.top_k,
+                    repetition_penalty=params.repetition_penalty,
+                    audio_prompt_path=None,
+                )
+            except Cancelled:
+                raise RuntimeError("stopped") from None
+            finally:
+                self._cancel = False
 
 
 ENGINE = Engine()
