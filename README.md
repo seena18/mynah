@@ -4,10 +4,13 @@ Self-hosted voice cloning TTS. Clone a voice from a recording, paste a script,
 and generate it chunk by chunk — so fixing one bad line costs one line, not the
 whole take.
 
-![mynah](docs/screenshot.png)
+![mynah](docs/demo.gif)
 
 Runs entirely on your own machine. Nothing is uploaded anywhere; there is no
 account, no API key, and no login to the model host.
+
+[Full demo with sound (~40s)](docs/demo.mp4) — writing a script, generating,
+listening back, then changing one line and re-rolling only that line.
 
 ## Quick start
 
@@ -263,6 +266,27 @@ This one has everything mynah needs:
 
 It also refuses to start on a port that is already in use, rather than printing
 a URL that goes nowhere. `uv run run.py` sidesteps all of this.
+
+## The demo
+
+`docs/demo.gif` and `docs/demo.mp4` are recorded by driving the real app:
+
+```bash
+python run.py                          # in one terminal
+uv run --group dev tools/demo.py       # in another
+```
+
+Nothing in it is staged. It clicks through a live server, waits on real
+generation, and the audio in the video is the WAV that run actually exported.
+What is added is presentation: headless Chromium draws no cursor, so one is
+injected into the page along with the captions, and the stretches where the
+machine is only thinking are timelapsed — by however much it takes to get each
+down to a few seconds, so the demo is the same length on a fast machine and a
+slow one. Everything else is real time.
+
+It runs on a scratch project and deletes it afterwards, along with only the
+takes no other project shares, so your own work is untouched and the next run
+still has something real to generate.
 
 ## Tests
 

@@ -30,6 +30,11 @@ dependencies = [
   "hf_xet",
 ]
 
+# Only for tools/demo.py, which records the README demo. Not needed to run
+# mynah:  uv run --group dev tools/demo.py
+[dependency-groups]
+dev = ["playwright>=1.40"]
+
 [project.urls]
 Repository = "https://github.com/seena18/mynah"
 
