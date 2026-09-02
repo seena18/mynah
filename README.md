@@ -311,7 +311,8 @@ exported afterwards.
 
 The one simulated part is the microphone. Headless Chromium has none, so it is
 given a WAV file to use as one (`--mic FILE`, defaulting to an existing voice's
-reference). Everything downstream of that is the real capture path — the app
+reference), and it holds the recording open until that sample has finished
+speaking rather than stopping at a fixed length and cutting it off mid-sentence. Everything downstream of that is the real capture path — the app
 records it, uploads it, compiles it, and the rest of the demo speaks in the
 voice it just made, which it then deletes along with the project.
 What is added is presentation: headless Chromium draws no cursor, so one is

@@ -36,9 +36,10 @@ EDITED = "No account, no API key, and not one byte leaves the room."
 # Seconds each timelapsed stretch of waiting is compressed to.
 TIMELAPSE_TARGET = 4.5
 
-# The record beat. Past MIN_RECORD (6s in the page) the timer turns green; a
-# little beyond that leaves the shot time to read.
-RECORD_SECONDS = 8.5
+# The record beat runs as long as the sample keeps talking, between these.
+# The page itself refuses anything under 6s, so the floor leaves margin.
+RECORD_MIN = 7.0
+RECORD_MAX = 25.0
 VOICE_NAME = "My voice"
 
 
@@ -176,19 +177,32 @@ def api(url: str, path: str, method: str = "GET", body: dict | None = None) -> d
         return json.loads(response.read() or b"{}")
 
 
-def prepare_mic(source: pathlib.Path, target: pathlib.Path) -> pathlib.Path:
+def prepare_mic(source: pathlib.Path, target: pathlib.Path) -> tuple[pathlib.Path, float]:
     """Turn a reference recording into something Chromium can use as a mic.
 
     --use-file-for-fake-audio-capture wants 16-bit PCM. Chromium's capture path
     also applies its own gain — measured at about 3x, which took a peak of 0.6
     to 1.02 and clipped it — so the level is taken down first. What the app
     stores is loudness-normalised anyway, so only the clipping matters.
+
+    Also reports where the speech actually stops, so the demo can hold the
+    recording open until the sample is finished instead of stopping at some
+    fixed number of seconds and cutting the sentence in half.
     """
+    import numpy as np
+    import soundfile as sf
+
     subprocess.run(
         [ffmpeg(), "-y", "-v", "error", "-i", str(source), "-ac", "1",
          "-ar", "48000", "-af", "volume=0.4", "-c:a", "pcm_s16le", str(target)],
         check=True)
-    return target
+    data, rate = sf.read(str(target), dtype="float32")
+    hop = int(0.02 * rate)
+    frames = data[:len(data) // hop * hop].reshape(-1, hop)
+    db = 20 * np.log10(np.sqrt((frames.astype("float64") ** 2).mean(axis=1)) + 1e-12)
+    voiced = np.flatnonzero(db > -45)
+    speech_ends = float(voiced[-1] + 1) * 0.02 if voiced.size else len(data) / rate
+    return target, speech_ends
 
 
 def clear_own_takes(url: str, pid: str) -> int:
@@ -250,7 +264,12 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
     wav = raw / "demo.wav"
 
     with sync_playwright() as playwright:
-        mic = prepare_mic(mic_source, raw / "mic.wav")
+        mic, speech_ends = prepare_mic(mic_source, raw / "mic.wav")
+        # Record until the sample has finished talking, with a beat of room
+        # after it, rather than for a fixed span that lands mid-sentence.
+        record_for = min(max(speech_ends + 0.7, RECORD_MIN), RECORD_MAX)
+        print(f"microphone sample speaks for {speech_ends:.1f}s; "
+              f"recording for {record_for:.1f}s")
         browser = playwright.chromium.launch(args=[
             "--force-color-profile=srgb",
             # The record beat is a real recording: Chromium takes this file as
@@ -284,9 +303,13 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
             page.once("dialog", lambda dialog: dialog.accept(VOICE_NAME))
             stage.click("#record", after=0)
             stage.mark("record_start")
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(1600)
             stage.caption("The timer goes green once there is enough to work with")
-            page.wait_for_timeout(int(RECORD_SECONDS * 1000) - 1500)
+            remaining = int(record_for * 1000) - 1600
+            page.wait_for_timeout(min(remaining, 5200))
+            if remaining > 5200:
+                stage.caption("Longer is better — it only ever reads the first 15 seconds")
+                page.wait_for_timeout(remaining - 5200)
             stage.click("#record", after=500)          # stop
             stage.mark("record_end")
 
