@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append a two-panel, sequential voice comparison to an existing demo.
+"""Add a two-panel, sequential voice comparison before an existing demo.
 
 Pass recordings of the same words. Audio receives edge trimming and matched
 loudness only; pitch, speed and the pauses inside each recording are retained.
@@ -108,7 +108,7 @@ def base_frame(text):
     return image
 
 
-def append_comparison(video, real, generated, text, output):
+def add_comparison(video, real, generated, text, output, position="start"):
     for path in (video, real, generated):
         if path.resolve() == output.resolve():
             raise ValueError("Output must differ from every input; preserve the base demo")
@@ -133,11 +133,11 @@ def append_comparison(video, real, generated, text, output):
         sf.write(str(audio), mix, RATE)
         peaks = [envelope(data) for data in clips]
         base = base_frame(text)
-        outro = work / "outro.mp4"
+        comparison = work / "comparison.mp4"
         command = [ffmpeg, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
                    "-s", f"{WIDTH}x{HEIGHT}", "-r", str(FPS), "-i", "pipe:0", "-i", str(audio),
                    "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-                   "-c:a", "aac", "-b:a", "160k", "-t", str(duration), str(outro)]
+                   "-c:a", "aac", "-b:a", "160k", "-t", str(duration), str(comparison)]
         process = subprocess.Popen(command, stdin=subprocess.PIPE)
         face = font(14, True)
         clock_face = font(15)
@@ -175,17 +175,18 @@ def append_comparison(video, real, generated, text, output):
                 process.wait()
         # Re-encode the join to keep timestamps, frame rate and audio continuous.
         final = work / "final.mp4"
+        order = "[v1][1:a][v0][0:a]" if position == "start" else "[v0][0:a][v1][1:a]"
         subprocess.run([
-            ffmpeg, "-y", "-v", "error", "-i", str(video), "-i", str(outro),
+            ffmpeg, "-y", "-v", "error", "-i", str(video), "-i", str(comparison),
             "-filter_complex",
             "[0:v]fps=25,setsar=1[v0];[1:v]setsar=1[v1];"
-            "[v0][0:a][v1][1:a]concat=n=2:v=1:a=1[v][a]",
+            + order + "concat=n=2:v=1:a=1[v][a]",
             "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "medium",
             "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
             "-ar", str(RATE), "-ac", "1", "-movflags", "+faststart", str(final),
         ], check=True)
         final.replace(output)
-    return {"outro_seconds": duration, "real_seconds": durations[0],
+    return {"comparison_seconds": duration, "position": position, "real_seconds": durations[0],
             "generated_seconds": durations[1], "starts": starts, "output": str(output)}
 
 
@@ -196,8 +197,9 @@ def main():
     parser.add_argument("--generated", type=pathlib.Path, required=True)
     parser.add_argument("--text", required=True)
     parser.add_argument("--out", type=pathlib.Path, required=True)
+    parser.add_argument("--position", choices=("start", "end"), default="start")
     args = parser.parse_args()
-    print(json.dumps(append_comparison(args.video, args.real, args.generated, args.text, args.out), indent=2))
+    print(json.dumps(add_comparison(args.video, args.real, args.generated, args.text, args.out, args.position), indent=2))
 
 
 if __name__ == "__main__":
