@@ -9,9 +9,9 @@ whole take.
 Runs entirely on your own machine. Nothing is uploaded anywhere; there is no
 account, no API key, and no login to the model host.
 
-[Full demo with sound (~1 min)](docs/demo.mp4) — recording a voice, writing a
+[Full demo with sound (~85 s)](docs/demo.mp4) — recording a voice, writing a
 script, generating, listening back, then changing one line and re-rolling only
-that line.
+that line. Ends with the same words spoken by the real voice and its clone.
 
 ## Quick start
 
@@ -325,6 +325,13 @@ injected into the page along with the captions, and the stretches where the
 machine is only thinking are timelapsed — by however much it takes to get each
 down to a few seconds, so the demo is the same length on a fast machine and a
 slow one. Everything else is real time.
+
+The published video ends with a two-panel voice comparison: the original
+recording plays first, followed by the same words generated with its compiled
+voice. Waveforms come from the actual audio. Only outer silence and loudness
+are adjusted; neither clip is pitch-shifted or sped up. To append this ending
+to a fresh demo, use `tools/add_voice_comparison.py --help` and provide both
+recordings, their shared text, and the base video.
 
 It runs on a scratch project and deletes it afterwards, along with the voice it
 recorded and only the takes no other project shares, so your own work is
