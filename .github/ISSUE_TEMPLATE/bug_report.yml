@@ -1,0 +1,59 @@
+name: Bug report
+description: Report an installation, generation, or playback problem.
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe what you expected and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the commands or actions that trigger the problem.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple silicon)
+        - Windows (native)
+        - WSL2
+        - Linux (native)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: OS version and GPU
+      placeholder: Windows 11, RTX 4080 SUPER, driver 591.86
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: mynah version or commit
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - uv
+        - pip
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Activity or terminal output
+      render: text

@@ -23,6 +23,9 @@ from pathlib import Path
 import torch
 
 REPO_ID = "ResembleAI/chatterbox-turbo"
+# The checkpoint validated on Metal, native Windows CUDA and WSL2 CUDA.
+# Pin every Hub operation so an upstream update cannot change a fresh install.
+MODEL_REVISION = "749d1c1a46eb10492095d68fbcf55691ccf137cd"
 MODEL_DIR_ENV = "MYNAH_MODEL_DIR"
 # The files Turbo's loader actually opens. Upstream's loader fetches every
 # *.safetensors in the repo, which includes the 1 GB s3gen.safetensors that the
@@ -35,8 +38,8 @@ MODEL_FILES = [
 # Sum of MODEL_FILES on the Hub at the pinned revision; used for the progress
 # readout when the Hub cannot be asked for exact sizes.
 EXPECTED_BYTES = 2_987_680_596
-# What upstream's loader would fetch. Only used if a file in MODEL_FILES has
-# been renamed upstream and the narrow download comes back incomplete.
+# What upstream's loader would fetch. An incomplete snapshot can retry this
+# broader set, always at the same pinned revision.
 UPSTREAM_PATTERNS = ["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"]
 
 
@@ -129,7 +132,8 @@ class Engine:
             return manual, sum((manual / n).stat().st_size for n in MODEL_FILES)
         from huggingface_hub import try_to_load_from_cache
 
-        paths = [try_to_load_from_cache(REPO_ID, name) for name in MODEL_FILES]
+        paths = [try_to_load_from_cache(REPO_ID, name, revision=MODEL_REVISION)
+                 for name in MODEL_FILES]
         if not all(isinstance(p, str) for p in paths):
             return None
         return Path(paths[0]).parent, sum(Path(p).stat().st_size for p in paths)
@@ -138,7 +142,8 @@ class Engine:
         try:
             from huggingface_hub import HfApi
 
-            info = HfApi().model_info(REPO_ID, files_metadata=True)
+            info = HfApi().model_info(REPO_ID, revision=MODEL_REVISION,
+                                     files_metadata=True, token=False)
             wanted = {s.rfilename: (s.size or 0) for s in info.siblings}
             total = sum(wanted.get(name, 0) for name in MODEL_FILES)
             return total or EXPECTED_BYTES
@@ -185,6 +190,7 @@ class Engine:
                          daemon=True).start()
         try:
             path = snapshot_download(repo_id=REPO_ID,
+                                     revision=MODEL_REVISION, token=False,
                                      allow_patterns=patterns or MODEL_FILES)
         finally:
             self._downloading = False
@@ -205,9 +211,8 @@ class Engine:
             checkpoint = self.download(log=log)
             loader = "manual" if self.manual_dir() else "hub"
             if not _complete(checkpoint):
-                # A file in MODEL_FILES has been renamed upstream. Fetch what
-                # their loader would have and try again — still never through
-                # from_pretrained, which insists on a login.
+                # Retry an incomplete snapshot with the upstream file patterns,
+                # retaining the release's pinned revision and anonymous access.
                 checkpoint = self.download(log=log, patterns=UPSTREAM_PATTERNS)
                 loader = "hub-broad"
             model = ChatterboxTurboTTS.from_local(checkpoint, self.device)

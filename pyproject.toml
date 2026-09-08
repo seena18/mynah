@@ -3,7 +3,7 @@
 # installed as a package, hence `package = false`.
 [project]
 name = "mynah"
-version = "0.2.0"
+version = "1.0.0"
 description = "Self-hosted voice cloning TTS with per-chunk regeneration"
 readme = "README.md"
 license = { file = "LICENSE" }

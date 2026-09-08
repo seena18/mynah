@@ -4,6 +4,8 @@ Self-hosted voice cloning TTS. Clone a voice from a recording, paste a script,
 and generate it chunk by chunk — so fixing one bad line costs one line, not the
 whole take.
 
+[v1.0.0 release notes and demo](https://github.com/seena18/mynah/releases/tag/v1.0.0)
+
 ![mynah](docs/demo.gif)
 
 Runs entirely on your own machine. Nothing is uploaded anywhere; there is no
@@ -216,8 +218,13 @@ wherever `HF_HOME` points) and are shared with anything else on the machine
 that uses the same model. Only the files Turbo reads are fetched — 2.99 GB, not
 the 4 GB upstream's loader pulls, which includes a vocoder it never opens.
 
+v1.0.0 pins weights, tokenizer files, cache lookups and download metadata to
+checkpoint `749d1c1a46eb10492095d68fbcf55691ccf137cd`, the revision validated on
+Metal and CUDA. An upstream model update will not silently change a fresh
+installation. `MYNAH_MODEL_DIR` remains an explicit override for local files.
+
 **Offline or firewalled?** Put these nine files from
-[ResembleAI/chatterbox-turbo](https://huggingface.co/ResembleAI/chatterbox-turbo/tree/main)
+[the pinned Chatterbox Turbo checkpoint](https://huggingface.co/ResembleAI/chatterbox-turbo/tree/749d1c1a46eb10492095d68fbcf55691ccf137cd)
 in a folder and point `MYNAH_MODEL_DIR` at it; nothing will be downloaded:
 
 ```
@@ -309,17 +316,19 @@ python run.py                          # in one terminal
 uv run --group dev tools/demo.py       # in another
 ```
 
-Nothing in it is staged. It clicks through a live server, records and compiles
-a voice, waits on real generation, and both things you hear are real: the
-reference the app stored when it recorded, and the WAV that run actually
-exported afterwards.
+The walkthrough drives a live server: it records and compiles a voice, queues
+real generation, and exports the audio used in the video. The microphone
+input comes from a prerecorded WAV supplied to headless Chromium through
+`--mic FILE`, defaulting to an existing voice's reference. Recording continues
+until the sample has finished speaking.
 
-The one simulated part is the microphone. Headless Chromium has none, so it is
-given a WAV file to use as one (`--mic FILE`, defaulting to an existing voice's
-reference), and it holds the recording open until that sample has finished
-speaking rather than stopping at a fixed length and cutting it off mid-sentence. Everything downstream of that is the real capture path — the app
-records it, uploads it, compiles it, and the rest of the demo speaks in the
-voice it just made, which it then deletes along with the project.
+For generation, the recorder prefers an existing compiled voice when one is
+available and shows that selection in the drawer. Otherwise it uses the voice
+it just recorded. This avoids passing the reference through the browser's
+audio processing a second time when generating with an existing voice. The
+optional `--takes` argument lets the recorder substitute selected audio takes
+before playback and export; it still runs generation on screen.
+
 What is added is presentation: headless Chromium draws no cursor, so one is
 injected into the page along with the captions, and the stretches where the
 machine is only thinking are timelapsed — by however much it takes to get each
@@ -340,7 +349,8 @@ untouched and the next run still has something real to generate.
 ## Tests
 
 Core tests cover splitting, fingerprints, chunk status, project migration,
-path validation, and the stitch's pause accuracy and loudness matching.
+path validation, pinned checkpoint selection, and the stitch's pause accuracy
+and loudness matching.
 They run in CI without torch or weights:
 
 ```bash
