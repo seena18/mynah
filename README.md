@@ -327,13 +327,26 @@ untouched and the next run still has something real to generate.
 
 ## Tests
 
-Everything that does not need the model — splitting, fingerprints, chunk
-status, project migration, and the stitch's pause accuracy and loudness
-matching — is covered, and runs in CI without torch or weights:
+Core tests cover splitting, fingerprints, chunk status, project migration,
+path validation, and the stitch's pause accuracy and loudness matching.
+They run in CI without torch or weights:
 
 ```bash
 python -m unittest discover tests
 ```
+
+Browser regressions run the real HTTP server with synthetic inference and
+temporary data. They check re-roll playback, project switching (including a
+preview still loading), saving before generation, failed saves, and malformed
+API identifiers. They also run in CI:
+
+```bash
+uv run --group dev python -m playwright install chromium
+MYNAH_BROWSER_TESTS=1 uv run --group dev python -m unittest discover -v tests
+```
+
+In PowerShell, set `$env:MYNAH_BROWSER_TESTS="1"` before the second command.
+The browser suite does not measure voice quality or GPU compatibility.
 
 ## Clone responsibly
 

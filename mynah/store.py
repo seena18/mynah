@@ -33,6 +33,20 @@ LEGACY_PROJECT_FILE = DATA / "project.json"     # single-project layout, pre-0.2
 DEFAULT_CHUNK_CHARS = 280
 
 
+class InvalidID(ValueError):
+    """An identifier must name one ordinary child directory."""
+
+
+def item_dir(root: Path, item_id: str) -> Path:
+    # Accept older/imported IDs as well as generated hex IDs, but never paths.
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", item_id):
+        raise InvalidID("invalid project or voice id")
+    path = root / item_id
+    if path.is_symlink() or path.resolve().parent != root.resolve():
+        raise InvalidID("invalid project or voice directory")
+    return path
+
+
 def new_id() -> str:
     return uuid.uuid4().hex[:10]
 
@@ -153,7 +167,7 @@ class Project:
 
     @property
     def directory(self) -> Path:
-        return PROJECTS / self.id
+        return item_dir(PROJECTS, self.id)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -188,7 +202,7 @@ class Project:
 
     @classmethod
     def load(cls, project_id: str) -> "Project":
-        path = PROJECTS / project_id / "project.json"
+        path = item_dir(PROJECTS, project_id) / "project.json"
         if not path.exists():
             raise KeyError(project_id)
         project = cls.from_dict(json.loads(path.read_text()))
@@ -219,7 +233,7 @@ def create_project(title: str = "Untitled") -> Project:
 
 
 def delete_project(project_id: str) -> None:
-    shutil.rmtree(PROJECTS / project_id, ignore_errors=True)
+    shutil.rmtree(item_dir(PROJECTS, project_id), ignore_errors=True)
 
 
 def migrate_legacy() -> Project | None:
@@ -241,7 +255,7 @@ def migrate_legacy() -> Project | None:
 # ---- voices --------------------------------------------------------------
 
 def voice_dir(voice_id: str) -> Path:
-    return VOICES / voice_id
+    return item_dir(VOICES, voice_id)
 
 
 def list_voices() -> list[dict]:
@@ -249,6 +263,8 @@ def list_voices() -> list[dict]:
         return []
     voices = []
     for directory in sorted(VOICES.iterdir()):
+        if directory.is_symlink():
+            continue
         meta = directory / "meta.json"
         if directory.is_dir() and meta.exists():
             entry = json.loads(meta.read_text())

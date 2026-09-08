@@ -172,6 +172,23 @@ class Voices(Sandbox):
 
 
 class Projects(Sandbox):
+    def test_path_ids_cannot_escape_data_directories(self):
+        project = store.create_project("Keep me")
+        for bad in ("", ".", "..", "../projects", "/tmp", "a/b", "a\\b", "C:temp"):
+            for operation in (store.Project.load, store.delete_project, store.voice_dir):
+                with self.subTest(id=bad, operation=operation.__name__):
+                    with self.assertRaises(store.InvalidID):
+                        operation(bad)
+        self.assertEqual(store.Project.load(project.id).title, "Keep me")
+
+    def test_symlink_directories_are_rejected(self):
+        (store.VOICES / "alias").symlink_to(store.PROJECTS, target_is_directory=True)
+        with self.assertRaises(store.InvalidID):
+            store.voice_dir("alias")
+        (store.PROJECTS / "alias").symlink_to(store.VOICES, target_is_directory=True)
+        with self.assertRaises(store.InvalidID):
+            store.delete_project("alias")
+
     def test_create_list_delete(self):
         a = store.create_project("Alpha")
         time.sleep(1.05)                       # `updated` has second resolution

@@ -63,7 +63,7 @@
   <div id="preview-active" class="preview-active" hidden>
     <audio id="preview-audio" preload="none"></audio>
     <button id="preview-play" class="ghost icon" title="Play/pause">▶</button>
-    <input id="preview-seek" class="seek" type="range" min="0" max="1" step="0.01" value="0">
+    <canvas id="preview-wave" class="wave" title="Click to seek"></canvas>
     <span id="preview-time" class="mono small muted">0:00 / 0:00</span>
     <button id="preview-close" class="ghost icon" title="Close preview">✕</button>
   </div>
@@ -108,9 +108,10 @@
     <button id="record" class="btn">● Record</button>
     <button id="upload" class="btn">Upload…</button>
     <input id="file" type="file" accept="audio/*,video/webm" hidden>
+    <canvas id="rec-meter" class="meter" hidden></canvas>
     <span id="rec-timer" class="timer mono" hidden>0.0s</span>
     <span class="grow"></span>
-    <span class="muted small">needs &gt; 5 s of clean speech</span>
+    <span id="rec-hint" class="muted small">needs &gt; 5 s of clean speech</span>
   </div>
   <p id="rec-note" class="note" hidden></p>
   <ul id="voice-list" class="voice-list"></ul>

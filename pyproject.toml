@@ -30,8 +30,7 @@ dependencies = [
   "hf_xet",
 ]
 
-# Only for tools/demo.py, which records the README demo. Not needed to run
-# mynah:  uv run --group dev tools/demo.py
+# Browser regressions and tools/demo.py. Not needed to run mynah.
 [dependency-groups]
 dev = ["playwright>=1.40"]
 

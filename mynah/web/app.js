@@ -21,6 +21,10 @@ let recorder = null;
 let playing = null;            // the one <audio> allowed to be audible
 let previewLoading = false;    // guards the Preview button's disabled state
                                 // against being clobbered by the next poll
+let stateEpoch = 0;            // discard polls that predate a save or navigation
+let navigation = 0;
+const edits = new Map();       // input -> unsaved value and its original project
+const saving = new Map();      // input -> request currently saving it
 
 /* The model refuses a reference under 5 s of audio. The browser drops a few
    hundred ms between start() and the first captured sample, so a timer that
@@ -47,6 +51,54 @@ const put = (path, body) => api(path, { method: 'PUT', body: JSON.stringify(body
 const del = (path) => api(path, { method: 'DELETE' });
 const fail = (error) => { console.error(error); toast(error.message || String(error)); };
 
+function bindEdit(input, path, body, send = put) {
+  function remember() {
+    edits.set(input, { pid: PID, path: path(), body: body(), send });
+    stateEpoch++;
+    closePreview();
+    if (STATE) renderChunks(STATE.project);
+  }
+  input.addEventListener('input', remember);
+  input.addEventListener('change', () => {
+    if (!edits.has(input)) remember();
+    saveField(input).catch(fail);
+  });
+}
+
+async function saveField(input) {
+  if (saving.has(input)) {
+    await saving.get(input);
+    return saveField(input);
+  }
+  const edit = edits.get(input);
+  if (!edit) return;
+  stateEpoch++;
+  const request = edit.send(edit.path, edit.body).then(state => {
+    if (edits.get(input) === edit) edits.delete(input);
+    stateEpoch++;
+    if (PID === edit.pid) apply(state);
+  }).finally(() => saving.delete(input));
+  saving.set(input, request);
+  return request;
+}
+
+async function flushEdits(pid = PID) {
+  // A user can keep typing during a save. Drain until the latest values have
+  // landed, and stop on failure instead of generating the previous script.
+  while ([...edits.values()].some(edit => edit.pid === pid)) {
+    await Promise.all([...edits].filter(([, edit]) => edit.pid === pid)
+      .map(([input]) => saveField(input)));
+  }
+}
+
+async function generate(chunkId = '') {
+  const pid = PID;
+  await flushEdits(pid);
+  if (pid !== PID) return;
+  const state = await post(`/api/projects/${pid}${chunkId ? `/chunks/${chunkId}` : ''}/generate`);
+  if (pid === PID) apply(state);
+}
+
 function toast(message) {
   // The activity line doubles as a toast: short-lived, non-modal, dismissable.
   $('queue').textContent = message;
@@ -58,14 +110,15 @@ function toast(message) {
 
 function apply(state) {
   if (!state) return;
-  STATE = state;
-  if (state.project.id !== PID) {
-    PID = state.project.id;
+  if (state.project.id !== STATE?.project.id) {
+    stateEpoch++;
     for (const li of rows.values()) li.remove();
     rows.clear();
     if (playing) { playing.pause(); playing = null; }
     closePreview();
   }
+  PID = state.project.id;
+  STATE = state;
   if (new URLSearchParams(location.search).get('p') !== PID) {
     history.replaceState(null, '', `?p=${PID}`);
   }
@@ -75,7 +128,7 @@ function apply(state) {
   renderVoiceCards(state.voices, state.project.voice_id);
   renderChunks(state.project);
   renderParams(state.project.params);
-  if (document.activeElement !== $('title')) $('title').value = state.project.title;
+  if (document.activeElement !== $('title') && !edits.has($('title'))) $('title').value = state.project.title;
   $('log').textContent = state.log.slice().reverse().join('\n');
 }
 
@@ -234,11 +287,11 @@ function buildRow(chunk) {
     <span class="err" hidden></span>`;
   const text = li.querySelector('textarea');
   text.addEventListener('input', () => autosize(text));
-  text.addEventListener('change', () => put(P(`/chunks/${chunk.id}`), { text: text.value }).then(apply).catch(fail));
-  li.querySelector('.pause').addEventListener('change', (e) =>
-    put(P(`/chunks/${chunk.id}`), { pause_after: +e.target.value }).then(apply).catch(fail));
+  bindEdit(text, () => P(`/chunks/${chunk.id}`), () => ({ text: text.value }));
+  const pause = li.querySelector('.pause');
+  bindEdit(pause, () => P(`/chunks/${chunk.id}`), () => ({ pause_after: +pause.value }));
   li.querySelector('.regen').addEventListener('click', () =>
-    post(P(`/chunks/${chunk.id}/generate`)).then(apply).catch(fail));
+    generate(chunk.id).catch(fail));
   li.querySelector('.drop').addEventListener('click', () =>
     del(P(`/chunks/${chunk.id}`)).then(apply).catch(fail));
   li.querySelector('.play').addEventListener('click', () => {
@@ -250,7 +303,8 @@ function buildRow(chunk) {
       playing.pause(); playing = null;
       if (same) return;
     }
-    const audio = new Audio(P(`/takes/${chunk.id}.wav?v=${li.dataset.fingerprint}`));
+    // Also bypass immutable responses cached by older releases of the app.
+    const audio = new Audio(P(`/takes/${chunk.id}.wav?v=${li.dataset.fingerprint}&play=${crypto.randomUUID()}`));
     audio.dataset.chunk = chunk.id;
     audio.onended = () => { if (playing === audio) playing = null; };
     playing = audio;
@@ -279,10 +333,10 @@ function renderChunks(project) {
     li.querySelector('.idx').textContent = index + 1;
     li.querySelector('.n').title = chunk.status;
     const text = li.querySelector('textarea');
-    if (document.activeElement !== text && text.value !== chunk.text) { text.value = chunk.text; autosize(text); }
+    if (document.activeElement !== text && !edits.has(text) && text.value !== chunk.text) { text.value = chunk.text; autosize(text); }
     else if (fresh) autosize(text);
     const pause = li.querySelector('.pause');
-    if (document.activeElement !== pause) pause.value = chunk.pause_after;
+    if (document.activeElement !== pause && !edits.has(pause)) pause.value = chunk.pause_after;
     li.querySelector('.play').disabled = chunk.status !== 'ready';
     li.querySelector('.regen').disabled = ['queued', 'rendering', 'empty', 'no-voice'].includes(chunk.status);
     const error = li.querySelector('.err');
@@ -295,11 +349,12 @@ function renderChunks(project) {
   const order = ['ready', 'stale', 'queued', 'rendering', 'no-voice', 'empty'];
   $('counts').textContent = order.filter(k => tally[k]).map(k => `${tally[k]} ${k}`).join(' · ');
   $('empty').hidden = project.chunks.length > 0;
-  $('generate').disabled = !(tally.stale > 0);
+  const dirty = [...edits.values()].some(edit => edit.pid === project.id);
+  $('generate').disabled = !(tally.stale > 0 || (dirty && project.voice_id));
   const count = $('stale-count');
   count.hidden = !(tally.stale > 0);
   count.textContent = tally.stale || '';
-  const canRender = (tally.ready > 0) && !(tally.stale || tally.queued || tally.rendering);
+  const canRender = (tally.ready > 0) && !(dirty || tally.stale || tally.queued || tally.rendering || tally['no-voice']);
   $('export').disabled = !canRender;
   // Not disabled outright while a preview is already loading — openPreview()
   // owns that state until its own canplay/error fires, or the next poll
@@ -310,7 +365,7 @@ function renderChunks(project) {
 function renderParams(params) {
   for (const [key, value] of Object.entries(params)) {
     const input = $(`p-${key}`);
-    if (input && document.activeElement !== input) input.value = value;
+    if (input && document.activeElement !== input && !edits.has(input)) input.value = value;
   }
 }
 
@@ -334,8 +389,7 @@ document.addEventListener('keydown', (e) => {
   // Cmd/Ctrl+Enter generates whatever is stale, from anywhere on the page.
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('generate').disabled) {
     e.preventDefault();
-    if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') document.activeElement.blur();
-    setTimeout(() => post(P('/generate')).then(apply).catch(fail), 60);
+    generate().catch(fail);
   }
 });
 $('open-voices').addEventListener('click', () => openOverlay('voices-drawer'));
@@ -347,12 +401,51 @@ $('activity-toggle').addEventListener('click', () => { $('activity').hidden = !$
 
 /* ---- recording --------------------------------------------------------- */
 
+/* A scrolling level meter fed by the microphone itself, so it is obvious the
+   input is live and being heard — a silent mic otherwise looks identical to a
+   working one until the voice fails to compile. */
+function startMeter(stream) {
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  context.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  const canvas = $('rec-meter');
+  const history = [];
+  let live = true;
+  (function tick() {
+    if (!live) return;
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+    // Root mean square, then a gentle curve so speech fills the meter.
+    history.push(Math.min(1, Math.sqrt(sum / samples.length) * 4) ** 0.7);
+    if (history.length > 64) history.shift();
+    const { pen, width, height } = surface(canvas);
+    const bar = 2, gap = 2, slots = Math.max(1, Math.floor(width / (bar + gap)));
+    const middle = height / 2;
+    pen.fillStyle = ink(canvas.dataset.enough ? '--ok' : '--bad');
+    for (let i = 0; i < slots; i++) {
+      // Newest on the right, so the trace scrolls the way it is read.
+      const value = history[history.length - slots + i] || 0;
+      const tall = Math.max(2, value * (height - 3));
+      pen.fillRect(i * (bar + gap), middle - tall / 2, bar, tall);
+    }
+    requestAnimationFrame(tick);
+  })();
+  return () => { live = false; context.close().catch(() => {}); };
+}
+
 async function startRecording() {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const chunks = [];
   recorder = new MediaRecorder(stream);
   const timer = $('rec-timer');
   const note = $('rec-note');
+  const meter = $('rec-meter');
+  const stopMeter = startMeter(stream);
+  meter.hidden = false;
+  $('rec-hint').hidden = true;
   note.hidden = true;
   timer.hidden = false;
   timer.textContent = '0.0s';
@@ -364,10 +457,14 @@ async function startRecording() {
     seconds = (Date.now() - started) / 1000;
     timer.textContent = `${seconds.toFixed(1)}s`;
     timer.style.color = seconds < MIN_RECORD ? 'var(--bad)' : 'var(--ok)';
+    meter.dataset.enough = seconds < MIN_RECORD ? '' : 'yes';
   }, 100);
   recorder.ondataavailable = (event) => chunks.push(event.data);
   recorder.onstop = async () => {
     clearInterval(tick);
+    stopMeter();
+    meter.hidden = true;
+    $('rec-hint').hidden = false;
     timer.hidden = true;
     stream.getTracks().forEach(track => track.stop());
     $('record').classList.remove('recording');
@@ -417,6 +514,68 @@ $('file').addEventListener('change', (event) => {
 const previewAudio = $('preview-audio');
 let timelineSegments = [];     // [{id, start, end}], seconds, from /timeline
 let lastHighlighted = null;    // chunk id, so timeupdate only touches the DOM on change
+let previewPeaks = null;       // normalised amplitude per bucket, from the real samples
+let previewUrl = "";           // object URL for the fetched mix, revoked on close
+let previewRequest = 0;        // invalidates async work after close/project switch
+
+function ink(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+/* Back the canvas at device resolution: a 190px canvas on a retina screen is
+   380 real pixels, and drawing at CSS size makes the bars soft. */
+function surface(canvas) {
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  if (canvas.width !== Math.round(width * ratio)) {
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+  }
+  const pen = canvas.getContext('2d');
+  pen.setTransform(ratio, 0, 0, ratio, 0, 0);
+  pen.clearRect(0, 0, width, height);
+  return { pen, width, height };
+}
+
+/* Peak amplitude per bucket, straight from the decoded samples. Strided
+   because a 6-second mix is 145k samples and only the envelope is drawn. */
+function peaksFrom(buffer, buckets) {
+  const data = buffer.getChannelData(0);
+  const per = Math.max(1, Math.floor(data.length / buckets));
+  const peaks = new Float32Array(buckets);
+  let loudest = 0;
+  for (let i = 0; i < buckets; i++) {
+    let top = 0;
+    for (let j = i * per; j < (i + 1) * per && j < data.length; j += 3) {
+      const v = data[j] < 0 ? -data[j] : data[j];
+      if (v > top) top = v;
+    }
+    peaks[i] = top;
+    if (top > loudest) loudest = top;
+  }
+  if (loudest > 0) for (let i = 0; i < buckets; i++) peaks[i] /= loudest;
+  return peaks;
+}
+
+/* Mirrored bars, played portion in the accent colour. */
+function drawWave(canvas, peaks, progress) {
+  const { pen, width, height } = surface(canvas);
+  const bar = 2, gap = 2, count = Math.max(1, Math.floor(width / (bar + gap)));
+  const middle = height / 2;
+  const played = ink('--accent'), rest = ink('--line-strong');
+  for (let i = 0; i < count; i++) {
+    const value = peaks ? peaks[Math.floor(i / count * peaks.length)] || 0 : 0;
+    const tall = Math.max(2, value * (height - 3));
+    pen.fillStyle = (i + 0.5) / count <= progress ? played : rest;
+    pen.fillRect(i * (bar + gap), middle - tall / 2, bar, tall);
+  }
+}
+
+function paintPreview() {
+  const total = previewAudio.duration;
+  const progress = total ? previewAudio.currentTime / total : 0;
+  drawWave($('preview-wave'), previewPeaks, progress);
+}
 
 function formatTime(seconds) {
   seconds = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
@@ -437,21 +596,51 @@ function highlightPlayingLine() {
 
 async function openPreview() {
   if (previewLoading) return;
+  const request = ++previewRequest;
+  const pid = PID;
+  const current = () => request === previewRequest && pid === PID;
   previewLoading = true;
   $('preview-open').disabled = true;
   $('preview-open').textContent = 'Loading…';
   // Stitched playback and chunk playback are still only one audible thing.
   if (playing) { playing.pause(); playing = null; }
   try {
-    timelineSegments = (await api(P('/timeline'))).segments;
+    const timeline = await api(`/api/projects/${pid}/timeline`);
+    if (!current()) return;
+    timelineSegments = timeline.segments;
   } catch (error) {
+    if (!current()) return;
     timelineSegments = [];     // still play — just no line highlight
   }
-  previewAudio.src = P('/preview.wav');
+  // Fetch the mix once and use those same bytes for both the waveform and
+  // playback. Letting <audio> fetch it separately would download it twice —
+  // and /preview.wav re-stitches per request, so the two copies need not even
+  // be identical.
+  try {
+    const response = await fetch(`/api/projects/${pid}/preview.wav`);
+    if (!response.ok) throw new Error('preview failed');
+    const bytes = await response.arrayBuffer();
+    if (!current()) return;
+    const decoder = new AudioContext();
+    // decodeAudioData detaches the buffer it is given, so hand it a copy.
+    let decoded;
+    try { decoded = await decoder.decodeAudioData(bytes.slice(0)); }
+    finally { await decoder.close(); }
+    if (!current()) return;
+    previewPeaks = peaksFrom(decoded, 400);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    previewAudio.src = previewUrl;
+  } catch (error) {
+    if (!current()) return;
+    previewPeaks = null;       // still play — just no waveform
+    previewAudio.src = `/api/projects/${pid}/preview.wav`;
+  }
   previewAudio.load();
 }
 
 function closePreview() {
+  previewRequest++;
   previewLoading = false;
   previewAudio.pause();
   previewAudio.removeAttribute('src');
@@ -463,7 +652,9 @@ function closePreview() {
   $('preview-open').hidden = false;
   $('preview-open').disabled = false;
   $('preview-open').textContent = '▶ Preview';
-  $('preview-seek').value = 0;
+  if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = ""; }
+  previewPeaks = null;
+  drawWave($('preview-wave'), null, 0);
   $('preview-time').textContent = '0:00 / 0:00';
 }
 
@@ -489,27 +680,60 @@ previewAudio.addEventListener('pause', () => { $('preview-play').textContent = '
 previewAudio.addEventListener('ended', () => { lastHighlighted = null; highlightPlayingLine(); });
 previewAudio.addEventListener('timeupdate', () => {
   $('preview-time').textContent = `${formatTime(previewAudio.currentTime)} / ${formatTime(previewAudio.duration)}`;
-  if (previewAudio.duration) $('preview-seek').value = previewAudio.currentTime / previewAudio.duration;
+  paintPreview();
   highlightPlayingLine();
 });
 previewAudio.addEventListener('loadedmetadata', () => {
   $('preview-time').textContent = `${formatTime(previewAudio.currentTime)} / ${formatTime(previewAudio.duration)}`;
+  paintPreview();
 });
+previewAudio.addEventListener('seeked', paintPreview);
+// timeupdate only fires about four times a second, which reads as a stuttering
+// playhead. While playing, repaint on every frame instead.
+(function sweep() {
+  if (!previewAudio.paused && !$('preview-active').hidden) paintPreview();
+  requestAnimationFrame(sweep);
+})();
 
 $('preview-open').addEventListener('click', openPreview);
 $('preview-close').addEventListener('click', closePreview);
 $('preview-play').addEventListener('click', () => {
   if (previewAudio.paused) previewAudio.play().catch(fail); else previewAudio.pause();
 });
-$('preview-seek').addEventListener('input', () => {
-  if (previewAudio.duration) previewAudio.currentTime = +$('preview-seek').value * previewAudio.duration;
+/* Click or drag anywhere on the waveform to seek. */
+function seekTo(event) {
+  if (!previewAudio.duration) return;
+  const box = $('preview-wave').getBoundingClientRect();
+  const at = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+  previewAudio.currentTime = at * previewAudio.duration;
+  paintPreview();
+}
+$('preview-wave').addEventListener('pointerdown', (event) => {
+  $('preview-wave').setPointerCapture(event.pointerId);
+  seekTo(event);
+});
+$('preview-wave').addEventListener('pointermove', (event) => {
+  if (event.buttons) seekTo(event);
+});
+window.addEventListener('resize', () => {
+  if (!$('preview-active').hidden) paintPreview();
 });
 
 /* ---- wiring ------------------------------------------------------------ */
 
 $('project-select').addEventListener('change', async (event) => {
-  PID = event.target.value;
-  apply(await api(stateUrl()).catch(fail));
+  const pid = event.target.value;
+  const request = ++navigation;
+  closePreview();
+  if (playing) { playing.pause(); playing = null; }
+  try {
+    await flushEdits();
+    const state = await api(`/api/state?p=${encodeURIComponent(pid)}`);
+    if (request === navigation) apply(state);
+  } catch (error) {
+    if (request === navigation) $('project-select').value = PID;
+    fail(error);
+  }
 });
 $('new-project').addEventListener('click', () => {
   const title = prompt('Project name', 'Untitled');
@@ -523,7 +747,7 @@ $('delete-project').addEventListener('click', () => {
     del(P()).then(apply).catch(fail);
   }
 });
-$('title').addEventListener('change', (e) => post(P(), { title: e.target.value }).then(apply).catch(fail));
+bindEdit($('title'), () => P(), () => ({ title: $('title').value }), post);
 $('title').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 
 $('voice-select').addEventListener('change', (event) => {
@@ -545,7 +769,7 @@ $('split').addEventListener('click', () => {
     .catch(fail);
 });
 $('add-chunk').addEventListener('click', () => post(P('/chunks'), { text: '' }).then(apply).catch(fail));
-$('generate').addEventListener('click', () => post(P('/generate')).then(apply).catch(fail));
+$('generate').addEventListener('click', () => generate().catch(fail));
 $('stop').addEventListener('click', () => post(`/api/queue/clear?p=${PID}`).then(apply).catch(fail));
 $('tidy').addEventListener('click', () => post(`/api/tidy?p=${PID}`).then(apply).catch(fail));
 $('export').addEventListener('click', async () => {
@@ -559,16 +783,19 @@ $('export').addEventListener('click', async () => {
   URL.revokeObjectURL(url);
 });
 for (const key of ['temperature', 'top_p', 'top_k', 'repetition_penalty']) {
-  $(`p-${key}`).addEventListener('change', (e) =>
-    post(P(), { params: { [key]: +e.target.value } }).then(apply).catch(fail));
+  const input = $(`p-${key}`);
+  bindEdit(input, () => P(), () => ({ params: { [key]: +input.value } }), post);
 }
 
 /* Poll faster while something is actually happening. */
 async function poll() {
+  const epoch = stateEpoch;
+  const pid = PID;
   try {
-    apply(await api(stateUrl()));
+    const state = await api(stateUrl());
+    if (epoch === stateEpoch && pid === PID) apply(state);
   } catch (error) {
-    if (PID && /no such project/i.test(error.message)) PID = '';
+    if (pid === PID && PID && /no such project/i.test(error.message)) PID = '';
   }
   const busy = STATE?.queue.current || STATE?.queue.pending
     || STATE?.engine.state === 'loading'

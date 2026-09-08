@@ -237,8 +237,71 @@ def clear_own_takes(url: str, pid: str) -> int:
     return removed
 
 
+def place_takes(url: str, pid: str, chosen: dict) -> None:
+    """Swap specific audio in for the takes just generated, by line index.
+
+    Generation still happens for real on screen; this only decides which roll
+    is heard. Every take is content-addressed, so writing to the fingerprint's
+    path is enough — the app re-reads the files when it builds the preview, so
+    the timeline and the line highlighting stay in step with what is actually
+    there. The demo deletes these along with its project, so nothing lingers.
+    """
+    if not chosen:
+        return
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from mynah import store
+
+    state = api(url, f"/api/state?p={pid}")
+    lines = [c for c in state["project"]["chunks"] if c["text"].strip()]
+    for index, source in chosen.items():
+        if index >= len(lines):
+            continue
+        target = store.TAKES / f"{lines[index]['fingerprint']}.wav"
+        shutil.copyfile(source, target)
+        print(f"  using {pathlib.Path(source).name} for line {index + 1}")
+
+
+def play_preview(stage, page, url: str, pid: str, wav: pathlib.Path, label: str) -> None:
+    """Open the preview, play the stitched mix through, and keep what was heard.
+
+    The app starts playing as soon as the browser says canplay. On a loaded
+    machine that stalls mid-clip and the picture then runs slower than the
+    audio muxed under it, so this waits for a full buffer and restarts from the
+    top; screen time and audio time then agree.
+
+    The mix is saved per playthrough because a later beat edits a line — the
+    audio in the video has to be whatever was actually playing at that moment.
+    """
+    stage.click("#preview-open", after=200)
+    page.wait_for_selector("#preview-active:not([hidden])", timeout=60000)
+    page.wait_for_function(
+        "() => { const a = document.getElementById('preview-audio');"
+        "        return a && a.readyState >= 4; }", timeout=120000)
+    page.evaluate("() => { const a = document.getElementById('preview-audio');"
+                  "        a.pause(); a.currentTime = 0; }")
+    page.wait_for_timeout(120)
+    stage.mark(f"{label}_start")
+    page.evaluate("() => document.getElementById('preview-audio').play()")
+    page.wait_for_function(
+        "() => { const a = document.getElementById('preview-audio');"
+        "        return a && a.ended; }", timeout=180000)
+    stage.mark(f"{label}_end")
+    with urllib.request.urlopen(f"{url}/api/projects/{pid}/export.wav",
+                                timeout=300) as response:
+        wav.write_bytes(response.read())
+    on_screen = stage.marks[f"{label}_end"] - stage.marks[f"{label}_start"]
+    heard = sound_seconds(wav)
+    if heard and abs(on_screen - heard) / heard > 0.15:
+        print(f"  warning: {label} took {on_screen:.1f}s on screen for {heard:.1f}s "
+              f"of audio — playback stalled, so the muxed audio will drift")
+    page.wait_for_timeout(500)
+    stage.click("#preview-close", after=400)
+
+
 def run(url: str, out_dir: pathlib.Path, keep_project: bool,
-        mic_source: pathlib.Path | None) -> dict:
+        mic_source: pathlib.Path | None, temperature: float | None = None,
+        takes: list | None = None) -> dict:
     from playwright.sync_api import sync_playwright
 
     state = api(url, "/api/state")
@@ -253,15 +316,31 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
     if not mic_source.exists():
         raise SystemExit(f"no such file: {mic_source}")
 
+    # Generate with an already-compiled voice rather than the one the demo
+    # records. A voice cloned through Chromium's fake microphone has been
+    # through Opus, AGC and a resample; at temperature 0.1 it conditioned badly
+    # enough to run away — 51s of near-silence for two short lines, measured.
+    # Choosing an existing voice is exactly what the drawer is for.
+    ready_voices = [v for v in state["voices"] if v["status"] == "ready"]
+    generate_voice = ready_voices[0]["id"] if ready_voices else ""
+    generate_voice_name = ready_voices[0]["name"] if ready_voices else ""
+    if generate_voice:
+        print(f"generating with the existing {generate_voice_name!r} voice")
+
     project = api(url, "/api/projects", "POST", {"title": "Demo"})["project"]
     pid = project["id"]
-    print(f"demo project {pid}")
+    if temperature is not None:
+        api(url, f"/api/projects/{pid}", "POST", {"params": {"temperature": temperature}})
+        print(f"demo project {pid} at temperature {temperature}")
+    else:
+        print(f"demo project {pid}")
 
     raw = out_dir / "raw"
     if raw.exists():
         shutil.rmtree(raw)
     raw.mkdir(parents=True)
     wav = raw / "demo.wav"
+    wav2 = raw / "demo_after_edit.wav"
 
     with sync_playwright() as playwright:
         mic, speech_ends = prepare_mic(mic_source, raw / "mic.wav")
@@ -288,7 +367,7 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
         )
         page = context.new_page()
         stage = Stage(page, t0)
-        voice_id = ""
+        voice_id = recorded_voice = ""
         try:
             page.goto(f"{url}/?p={pid}", wait_until="networkidle")
             page.evaluate(OVERLAY_JS)
@@ -321,14 +400,21 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
             page.wait_for_function(
                 "() => typeof STATE !== 'undefined' && STATE && STATE.project.voice_id",
                 timeout=120000)
-            voice_id = page.evaluate("() => STATE.project.voice_id")
+            recorded_voice = page.evaluate("() => STATE.project.voice_id")
             page.wait_for_function(
                 "() => { if (typeof STATE === 'undefined' || !STATE) return false;"
                 "        const v = STATE.voices.find(v => v.id === STATE.project.voice_id);"
                 "        return v && v.status === 'ready'; }",
                 timeout=300000)
             stage.timelapse(compiling)
-            page.wait_for_timeout(900)
+            page.wait_for_timeout(700)
+            voice_id = recorded_voice
+            if generate_voice and generate_voice != recorded_voice:
+                stage.caption(f"Voices are shared — this one uses {generate_voice_name}")
+                api(url, f"/api/projects/{pid}", "POST", {"voice_id": generate_voice})
+                page.wait_for_timeout(1400)     # let the poll show the switch
+                voice_id = generate_voice
+            page.wait_for_timeout(500)
             stage.click("#voices-drawer [data-close]", after=700)
 
             # --- script ---
@@ -353,41 +439,13 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
             stage.click("#generate", after=300)
             stage.wait_settled()
             stage.timelapse(began)
+            if takes:
+                place_takes(url, pid, {0: takes[0], 1: takes[1]})
             page.wait_for_timeout(600)
 
             # --- preview: the part with sound ---
             stage.caption("Preview plays the stitched mix, in the browser")
-            stage.click("#preview-open", after=200)
-            page.wait_for_selector("#preview-active:not([hidden])", timeout=60000)
-            # The app starts playing as soon as the browser says canplay. On a
-            # loaded machine that stalls mid-clip, and the picture then runs
-            # slower than the audio being muxed under it. Let it buffer fully,
-            # then start from the top, so screen time and audio time agree.
-            page.wait_for_function(
-                "() => { const a = document.getElementById('preview-audio');"
-                "        return a && a.readyState >= 4; }", timeout=120000)
-            page.evaluate("() => { const a = document.getElementById('preview-audio');"
-                          "        a.pause(); a.currentTime = 0; }")
-            page.wait_for_timeout(120)
-            stage.mark("preview_start")
-            page.evaluate("() => document.getElementById('preview-audio').play()")
-            page.wait_for_function(
-                "() => { const a = document.getElementById('preview-audio');"
-                "        return a && a.ended; }", timeout=120000)
-            stage.mark("preview_end")
-            # Grab the mix now, not at the end: the edit beat below changes
-            # line 2, and the audio in the video has to be what was heard.
-            with urllib.request.urlopen(
-                    f"{url}/api/projects/{pid}/export.wav", timeout=300) as response:
-                wav.write_bytes(response.read())
-            on_screen = stage.marks["preview_end"] - stage.marks["preview_start"]
-            heard = sound_seconds(wav)
-            if heard and abs(on_screen - heard) / heard > 0.15:
-                print(f"  warning: preview took {on_screen:.1f}s on screen for "
-                      f"{heard:.1f}s of audio — the machine stalled playback, so "
-                      f"the muxed audio will drift against the highlighting")
-            page.wait_for_timeout(500)
-            stage.click("#preview-close", after=400)
+            play_preview(stage, page, url, pid, wav, "preview")
 
             # --- the point of the whole thing ---
             stage.caption("Change one line — only that line goes stale")
@@ -407,6 +465,13 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
             stage.click(".chunk:nth-child(2) .regen", after=300)
             stage.wait_settled()
             stage.timelapse(began)
+            if takes:
+                place_takes(url, pid, {1: takes[2]})
+
+            # Close the loop on screen: the whole claim is that one line can be
+            # fixed without touching the rest, so the fixed mix has to be heard.
+            stage.caption("Hear it again — only that line was re-rendered")
+            play_preview(stage, page, url, pid, wav2, "preview2")
 
             stage.caption("Export the finished mix", 1800)
             stage.caption("")
@@ -419,8 +484,8 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
             if not keep_project:
                 clear_own_takes(url, pid)
                 api(url, f"/api/projects/{pid}", "DELETE")
-                if voice_id:
-                    api(url, f"/api/voices/{voice_id}", "DELETE")
+                if recorded_voice and recorded_voice != generate_voice:
+                    api(url, f"/api/voices/{recorded_voice}", "DELETE")
                 print(f"run failed — removed demo project {pid} and its voice")
             raise
         finally:
@@ -431,10 +496,11 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
     # What the app stored for the voice it just compiled is exactly what the
     # microphone fed it, so that is what plays over the record beat.
     recorded = raw / "recorded.wav"
-    with urllib.request.urlopen(f"{url}/api/voices/{voice_id}/reference.wav",
+    with urllib.request.urlopen(f"{url}/api/voices/{recorded_voice}/reference.wav",
                                 timeout=120) as response:
         recorded.write_bytes(response.read())
-    result = {"video": str(video), "wav": str(wav), "recorded": str(recorded),
+    result = {"video": str(video), "wav": str(wav), "wav2": str(wav2),
+              "recorded": str(recorded),
               "marks": stage.marks, "fast": stage.fast, "pid": pid,
               "voice_id": voice_id}
     print(json.dumps({k: v for k, v in result.items() if k != "video"}, indent=2))
@@ -442,8 +508,11 @@ def run(url: str, out_dir: pathlib.Path, keep_project: bool,
     if not keep_project:
         freed = clear_own_takes(url, pid)
         api(url, f"/api/projects/{pid}", "DELETE")
-        api(url, f"/api/voices/{voice_id}", "DELETE")
-        print(f"deleted demo project {pid}, its voice, and {freed} take(s) only it used")
+        # Only the voice the demo recorded; the borrowed one is the user's.
+        if recorded_voice and recorded_voice != generate_voice:
+            api(url, f"/api/voices/{recorded_voice}", "DELETE")
+        print(f"deleted demo project {pid}, the voice it recorded, and "
+              f"{freed} take(s) only it used")
     return result
 
 
@@ -526,23 +595,27 @@ def build(result: dict, out_dir: pathlib.Path) -> pathlib.Path:
         removed = sum((e - s) * (1 - 1 / f) for s, e, f in fast if e <= marks[mark])
         return max(0.0, marks[mark] - removed)
 
-    # Two things are audible: the voice going in during the record beat, and
-    # the clone of it reading new lines during the preview.
-    sources, filters, mixed = [], [], []
-    heard = result.get("recorded")
-    if heard and "record_start" in marks:
-        at = placed("record_start")
+    # Three things are audible: the voice going into the microphone, the clone
+    # reading the script back, and the same mix again once one line has been
+    # re-rolled — that last one is the whole claim, so it has to be heard.
+    plan = []
+    if result.get("recorded") and "record_start" in marks:
         span = marks.get("record_end", marks["record_start"]) - marks["record_start"]
-        sources += ["-i", heard]
-        filters.append(f"[{len(mixed) + 1}:a]atrim=0:{span:.2f},asetpts=PTS-STARTPTS,"
-                       f"adelay={int(at * 1000)}|{int(at * 1000)}[a{len(mixed)}]")
-        mixed.append(f"[a{len(mixed)}]")
-        print(f"  recording audible at {at:.1f}s for {span:.1f}s")
-    at = placed("preview_start")
-    sources += ["-i", result["wav"]]
-    filters.append(f"[{len(mixed) + 1}:a]adelay={int(at * 1000)}|{int(at * 1000)}[a{len(mixed)}]")
-    mixed.append(f"[a{len(mixed)}]")
-    print(f"  generated mix audible at {at:.1f}s")
+        plan.append((result["recorded"], "record_start", span, "recording"))
+    plan.append((result["wav"], "preview_start", None, "first mix"))
+    if result.get("wav2") and "preview2_start" in marks:
+        plan.append((result["wav2"], "preview2_start", None, "mix after the edit"))
+
+    sources, filters, mixed = [], [], []
+    for index, (path, mark, span, label) in enumerate(plan):
+        at = placed(mark)
+        sources += ["-i", str(path)]
+        # The recording is trimmed to its beat; the mixes are already exact.
+        trim = f"atrim=0:{span:.2f},asetpts=PTS-STARTPTS," if span else ""
+        filters.append(f"[{index + 1}:a]{trim}"
+                       f"adelay={int(at * 1000)}|{int(at * 1000)}[a{index}]")
+        mixed.append(f"[a{index}]")
+        print(f"  {label} audible at {at:.1f}s")
 
     # normalize=0: amix halves every input otherwise, and these never overlap.
     filters.append("".join(mixed) + f"amix=inputs={len(mixed)}:normalize=0[a]")
@@ -582,6 +655,12 @@ def main() -> int:
     parser.add_argument("--out", type=pathlib.Path, default=DOCS)
     parser.add_argument("--keep-project", action="store_true",
                         help="leave the demo project behind for inspection")
+    parser.add_argument("--takes", type=pathlib.Path, nargs=3, metavar=("L1", "L2", "L3"),
+                        help="audio to use for line 1, line 2, and the edited "
+                             "line 3, instead of whichever roll comes out")
+    parser.add_argument("--temperature", type=float,
+                        help="sampling temperature for the demo project; "
+                             "lower is more deterministic, and more monotone")
     parser.add_argument("--mic", type=pathlib.Path,
                         help="audio played into the browser's fake microphone "
                              "during the record beat; defaults to an existing "
@@ -596,7 +675,8 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    result = run(args.url, args.out, args.keep_project, args.mic)
+    result = run(args.url, args.out, args.keep_project, args.mic,
+                 args.temperature, args.takes)
     (args.out / "raw" / "marks.json").write_text(
         json.dumps({"marks": result["marks"], "fast": result["fast"]}, indent=2) + "\n")
     build(result, args.out)

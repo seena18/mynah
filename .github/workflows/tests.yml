@@ -18,6 +18,19 @@ jobs:
       - run: pip install numpy soundfile pyloudnorm
       - run: python -m unittest discover -v tests
 
+  browser:
+    # The actual HTTP server and browser, with synthetic inference and isolated
+    # data. No model weights or GPU required.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy soundfile pyloudnorm fastapi uvicorn python-multipart playwright
+      - run: python -m playwright install --with-deps chromium
+      - run: MYNAH_BROWSER_TESTS=1 python -m unittest discover -v tests
+
   resolve:
     # Prove the dependency set still resolves for a fresh install, without
     # downloading torch. This is the check that would have caught chatterbox's

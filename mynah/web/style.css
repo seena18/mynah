@@ -203,18 +203,13 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
    in the footer. */
 .preview-active { display: flex; align-items: center; gap: 8px; }
 .preview-active audio { display: none; }
-.seek {
-  width: 140px; height: 4px; -webkit-appearance: none; appearance: none;
-  background: var(--line-strong); border-radius: 2px; border: none; padding: 0;
-}
-.seek::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
-  background: var(--accent); cursor: pointer; margin-top: -4px;
-}
-.seek::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: none; cursor: pointer; }
-.seek::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--line-strong); }
-.seek::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line-strong); }
 
+/* Waveforms are drawn to canvas from the real samples — the transport shows
+   the mix it is playing, and the meter shows what the microphone is hearing.
+   Sized in CSS, backed at devicePixelRatio in JS so the bars stay crisp. */
+.wave { width: 190px; height: 30px; cursor: pointer; display: block; }
+/* flex: none, or the actions row squeezes the meter to nothing. */
+.meter { width: 130px; height: 26px; display: block; flex: none; }
 /* The line currently sounding during stitched playback. */
 .chunk.now-playing { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
 .chunk.now-playing .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
@@ -232,6 +227,6 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
   .chunk .side { grid-column: 2; justify-content: flex-end; }
   #counts { display: none; }
   .activity { bottom: 0; }
-  .seek { width: 90px; }
+  .wave { width: 110px; }
   #preview-time { display: none; }
 }

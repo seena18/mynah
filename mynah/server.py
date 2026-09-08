@@ -92,6 +92,8 @@ def update_project(pid: str, body: ProjectBody) -> dict:
         if body.title is not None:
             project.title = body.title.strip() or "Untitled"
         if body.voice_id is not None:
+            if body.voice_id and not store.voice_dir(body.voice_id).is_dir():
+                raise HTTPException(404, "no such voice")
             project.voice_id = body.voice_id
         if body.params is not None:
             project.params.update(body.params)
@@ -204,9 +206,9 @@ def take(pid: str, chunk_id: str):
         path = project.take_path(chunk) if chunk else None
     if path is None or not path.exists():
         raise HTTPException(404, "no take for this chunk yet")
-    # The filename is a content hash, so a take never changes under a URL.
+    # A re-roll replaces the take without changing text, voice or parameters.
     return FileResponse(path, media_type="audio/wav",
-                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+                        headers={"Cache-Control": "no-store"})
 
 
 def _gather_pieces(project: store.Project) -> list[tuple[Path, float]]:
@@ -404,6 +406,11 @@ def voice_reference(voice_id: str):
 
 @app.exception_handler(RuntimeError)
 def _runtime_error(_request, error: RuntimeError):
+    return JSONResponse({"detail": str(error)}, status_code=400)
+
+
+@app.exception_handler(store.InvalidID)
+def _invalid_id(_request, error: store.InvalidID):
     return JSONResponse({"detail": str(error)}, status_code=400)
 
 
