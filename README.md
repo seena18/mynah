@@ -95,6 +95,11 @@ cache, on real hardware. "Per chunk" is a ~3-second line of speech.
 | WSL2 Ubuntu 22.04, RTX 4080 SUPER (CUDA) | 161 s | 8 s | 0.4–1.0 s | 4.8 GB |
 | Windows 11, RTX 4080 SUPER (CUDA) | 100 s, + 60 s for the CUDA torch | 10 s | 0.5–1.0 s | 4.8 GB |
 
+**Revalidated September 8, 2026:** native Windows 11 and WSL2 Ubuntu 22.04 both
+passed all 44 tests and the real CUDA upload → generate → edit → re-roll →
+preview → export flow from fresh clones and empty model caches.
+See the [retest results and scope](docs/platform-validation-2026-09-08.md).
+
 - **Windows gets CUDA through the PyTorch index**, not PyPI — PyPI's Windows
   torch wheel is CPU-only. `uv run` does this by itself (see
   `[tool.uv.sources]` in `pyproject.toml`); with pip, run the one extra line
