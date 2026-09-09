@@ -116,8 +116,16 @@ class Browser(unittest.TestCase):
         self.page.reload()
         rows = self.page.locator("#chunks .chunk")
         self.assertEqual(rows.count(), 3)
+        self.page.evaluate("""() => {
+          window.__sawDragGhost = false;
+          new MutationObserver(() => {
+            if (document.querySelector('.drag-ghost')) window.__sawDragGhost = true;
+          }).observe(document.body, {childList: true});
+        }""")
         rows.nth(0).locator(".drag").drag_to(rows.nth(2))
         self.page.wait_for_function("STATE.project.chunks[1].text === 'Original spoken line.'")
+        self.assertTrue(self.page.evaluate("window.__sawDragGhost"))
+        self.assertEqual(self.page.locator(".drag-ghost").count(), 0)
         state = self.request("/api/state?p=" + self.pid)
         self.assertEqual([chunk["text"] for chunk in state["project"]["chunks"]], [
             "Second line.", "Original spoken line.", "Third line.",

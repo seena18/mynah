@@ -120,7 +120,15 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
 }
 .chunk .drag:hover, .chunk .drag:focus-visible { color: var(--text); background: var(--raise); outline: none; }
 .chunk .drag:active { cursor: grabbing; }
-.chunk.dragging { opacity: 0.48; border-color: var(--accent); }
+.chunk.dragging { opacity: 0.22; border-color: var(--accent); }
+.chunk.drag-ghost {
+  position: fixed; z-index: 60; left: 0; top: 0; margin: 0;
+  pointer-events: none; opacity: 0.97; border-color: var(--accent);
+  box-shadow: 0 18px 46px rgba(0,0,0,0.56), 0 0 0 1px rgba(90,209,200,0.16);
+  transform-origin: top left; will-change: transform;
+}
+.chunk.drag-ghost .side { opacity: 1; }
+.chunks.drag-active { cursor: grabbing; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .s-ready .dot { background: var(--ok); }
 .s-stale .dot { background: var(--warn); }

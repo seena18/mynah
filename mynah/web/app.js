@@ -27,6 +27,8 @@ const edits = new Map();       // input -> unsaved value and its original projec
 const saving = new Map();      // input -> request currently saving it
 let draggingRow = null;        // row currently owned by native drag and drop
 let dragStartOrder = [];
+let dragGhost = null;          // visible copy of the complete row under the pointer
+let dragOffset = { x: 0, y: 0 };
 let reordering = false;        // keep polls from undoing the optimistic order
 
 /* The model refuses a reference under 5 s of audio. The browser drops a few
@@ -318,7 +320,19 @@ async function saveChunkOrder(ids) {
   }
 }
 
+function moveChunkGhost(event) {
+  if (!dragGhost || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+  dragGhost.style.transform = `translate3d(${event.clientX - dragOffset.x}px, ${event.clientY - dragOffset.y}px, 0)`;
+}
+
+function removeChunkGhost() {
+  if (dragGhost) dragGhost.remove();
+  dragGhost = null;
+  $('chunks').classList.remove('drag-active');
+}
+
 function finishChunkDrag() {
+  removeChunkGhost();
   if (!draggingRow) return;
   const before = dragStartOrder;
   const after = chunkOrder();
@@ -331,14 +345,25 @@ function finishChunkDrag() {
 $('chunks').addEventListener('dragover', (event) => {
   if (!draggingRow) return;
   event.preventDefault();
+  moveChunkGhost(event);
   event.dataTransfer.dropEffect = 'move';
   const otherRows = [...$('chunks').children].filter(row => row !== draggingRow);
+  const previousTops = new Map(otherRows.map(row => [row, row.getBoundingClientRect().top]));
   const before = otherRows.find(row => {
     const box = row.getBoundingClientRect();
     return event.clientY < box.top + box.height / 2;
   });
   $('chunks').insertBefore(draggingRow, before || null);
   refreshChunkNumbers();
+  for (const row of otherRows) {
+    const moved = previousTops.get(row) - row.getBoundingClientRect().top;
+    if (!moved) continue;
+    row.getAnimations().forEach(animation => animation.cancel());
+    row.animate([
+      { transform: `translateY(${moved}px)` },
+      { transform: 'translateY(0)' },
+    ], { duration: 150, easing: 'cubic-bezier(.22,.8,.3,1)' });
+  }
 });
 $('chunks').addEventListener('drop', (event) => {
   if (draggingRow) event.preventDefault();
@@ -372,6 +397,25 @@ function buildRow(chunk) {
     dragStartOrder = chunkOrder();
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', chunk.id);
+    const box = li.getBoundingClientRect();
+    dragOffset = {
+      x: Math.max(0, event.clientX - box.left),
+      y: Math.max(0, event.clientY - box.top),
+    };
+    dragGhost = li.cloneNode(true);
+    dragGhost.className = 'chunk drag-ghost';
+    dragGhost.style.width = `${box.width}px`;
+    dragGhost.querySelector('textarea').value = text.value;
+    dragGhost.querySelector('.pause').value = pause.value;
+    document.body.append(dragGhost);
+    $('chunks').classList.add('drag-active');
+    moveChunkGhost(event);
+    // The browser's default drag image would only contain the small handle,
+    // since that is the draggable element. The in-page ghost above is the
+    // complete row and is also visible in screen recordings.
+    const blank = document.createElement('canvas');
+    blank.width = blank.height = 1;
+    event.dataTransfer.setDragImage(blank, 0, 0);
     closePreview();
     requestAnimationFrame(() => { if (draggingRow === li) li.classList.add('dragging'); });
   });
