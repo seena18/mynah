@@ -141,6 +141,28 @@ class Browser(unittest.TestCase):
         self.assertTrue(self.page.locator("#preview-active").is_hidden())
         self.assertIsNone(self.page.locator("#preview-audio").get_attribute("src"))
 
+    def test_deleting_a_chunk_discards_and_rebuilds_preview(self):
+        self.request(f"/api/projects/{self.pid}/chunks", "POST", {"text": "Delete this line."})
+        self.request(f"/api/projects/{self.pid}/generate", "POST", {})
+        for _ in range(100):
+            chunks = self.request("/api/state?p=" + self.pid)["project"]["chunks"]
+            if len(chunks) == 2 and all(chunk["status"] == "ready" for chunk in chunks):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("both chunks did not finish")
+        self.page.reload()
+        self.page.locator("#preview-open").click()
+        self.page.locator("#preview-active").wait_for(state="visible")
+        self.page.locator("#chunks .chunk").nth(1).locator(".drop").click()
+        self.page.locator("#chunks .chunk").nth(1).wait_for(state="detached")
+        self.assertTrue(self.page.locator("#preview-active").is_hidden())
+        self.assertIsNone(self.page.locator("#preview-audio").get_attribute("src"))
+
+        self.page.locator("#preview-open").click()
+        self.page.locator("#preview-active").wait_for(state="visible")
+        self.page.wait_for_function("timelineSegments.length === 1")
+
     def test_project_switch_discards_inflight_preview(self):
         held = []
         self.page.route("**/preview.wav", lambda route: held.append(route))

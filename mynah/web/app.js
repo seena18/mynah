@@ -111,6 +111,14 @@ function toast(message) {
 
 /* ---- apply ------------------------------------------------------------- */
 
+function mixSignature(project) {
+  // Everything that can change the stitched bytes or their sequence. Status
+  // matters for re-rolls because the fingerprint deliberately stays the same.
+  return project.chunks.map(chunk => [
+    chunk.id, chunk.fingerprint, chunk.pause_after, chunk.status,
+  ]).join('|');
+}
+
 function apply(state) {
   if (!state) return;
   if (state.project.id !== STATE?.project.id) {
@@ -118,6 +126,10 @@ function apply(state) {
     for (const li of rows.values()) li.remove();
     rows.clear();
     if (playing) { playing.pause(); playing = null; }
+    closePreview();
+  } else if (STATE && mixSignature(state.project) !== mixSignature(STATE.project)) {
+    // A preview is one stitched snapshot. Once its inputs change, discard it
+    // so playback cannot claim to represent the rows currently on screen.
     closePreview();
   }
   PID = state.project.id;
