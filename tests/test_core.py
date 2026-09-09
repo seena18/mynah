@@ -172,6 +172,19 @@ class Voices(Sandbox):
 
 
 class Projects(Sandbox):
+    def test_reorder_requires_an_exact_permutation(self):
+        project = store.Project(chunks=[
+            store.Chunk(id="a", text="one"),
+            store.Chunk(id="b", text="two"),
+            store.Chunk(id="c", text="three"),
+        ])
+        project.reorder(["c", "a", "b"])
+        self.assertEqual([chunk.id for chunk in project.chunks], ["c", "a", "b"])
+        for invalid in (["a", "b"], ["a", "b", "missing"], ["a", "a", "b"]):
+            with self.subTest(order=invalid), self.assertRaises(ValueError):
+                project.reorder(invalid)
+        self.assertEqual([chunk.id for chunk in project.chunks], ["c", "a", "b"])
+
     def test_path_ids_cannot_escape_data_directories(self):
         project = store.create_project("Keep me")
         for bad in ("", ".", "..", "../projects", "/tmp", "a/b", "a\\b", "C:temp"):

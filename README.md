@@ -129,14 +129,16 @@ where you were.
 2. **Script.** *Paste script…* opens a sheet. Blank lines become line breaks;
    anything longer than the character limit is split at sentence ends. Or add
    lines one at a time with *+ Line*.
-3. **Generate.** *Generate* (or `⌘`/`Ctrl` + `Enter`) queues every line that is
+3. **Arrange.** Drag a line by its handle to change the sequence. Existing
+   takes stay ready, and Preview and Export immediately follow the saved order.
+4. **Generate.** *Generate* (or `⌘`/`Ctrl` + `Enter`) queues every line that is
    stale. ↻ on a line re-rolls just that line — for when a take is fine except
    for one word. Hover a line to see its controls.
-4. **Preview.** *▶ Preview* plays the same stitched mix in the browser — no
+5. **Preview.** *▶ Preview* plays the same stitched mix in the browser — no
    download — and highlights the line currently sounding as it plays, so you
    hear the whole thing flow together rather than line by line. Enabled under
    the same condition as Export: every non-empty line has to be `ready`.
-5. **Export.** Stitches the takes together with each line's trailing pause and
+6. **Export.** Stitches the takes together with each line's trailing pause and
    downloads a WAV. At this step each take is trimmed of the model's own
    leading and trailing silence, loudness-matched to the others, and given an
    8 ms fade at each end — so a 0.4 s pause is 0.4 s, and takes that came out

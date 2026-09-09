@@ -99,15 +99,23 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
 /* ---- chunks ----------------------------------------------------------- */
 .chunks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .chunk {
-  display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; align-items: start;
+  display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: start;
   padding: 8px 10px 8px 6px; border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--panel);
 }
 .chunk:focus-within, .chunk:hover { border-color: var(--line-strong); }
 .chunk .n {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding-top: 9px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  padding-top: 4px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums;
 }
+.chunk .marker { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 16px; }
+.chunk .drag {
+  width: 24px; height: 30px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: var(--faint); cursor: grab; font-size: 17px; line-height: 1;
+}
+.chunk .drag:hover, .chunk .drag:focus-visible { color: var(--text); background: var(--raise); outline: none; }
+.chunk .drag:active { cursor: grabbing; }
+.chunk.dragging { opacity: 0.48; border-color: var(--accent); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .s-ready .dot { background: var(--ok); }
 .s-stale .dot { background: var(--warn); }
@@ -223,7 +231,7 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
   .title { width: 110px; }
   .toolbar { flex-wrap: wrap; }
   .toolbar select { min-width: 140px; }
-  .chunk { grid-template-columns: 34px 1fr; }
+  .chunk { grid-template-columns: 48px 1fr; }
   .chunk .side { grid-column: 2; justify-content: flex-end; }
   #counts { display: none; }
   .activity { bottom: 0; }

@@ -155,6 +155,22 @@ def add_chunk(pid: str, body: ChunkBody) -> dict:
     return RENDER.snapshot(pid)
 
 
+class ChunkOrderBody(BaseModel):
+    ids: list[str]
+
+
+@app.put("/api/projects/{pid}/chunks/order")
+def reorder_chunks(pid: str, body: ChunkOrderBody) -> dict:
+    with RENDER.lock:
+        project = _project(pid)
+        try:
+            project.reorder(body.ids)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+        project.save()
+    return RENDER.snapshot(pid)
+
+
 @app.put("/api/projects/{pid}/chunks/{chunk_id}")
 def edit_chunk(pid: str, chunk_id: str, body: ChunkBody) -> dict:
     with RENDER.lock:

@@ -110,6 +110,29 @@ class Browser(unittest.TestCase):
         self.assertNotEqual(before["hash"], after["hash"])
         self.assertEqual(after["cache"], "no-store")
 
+    def test_dragging_lines_persists_the_new_order(self):
+        self.request(f"/api/projects/{self.pid}/chunks", "POST", {"text": "Second line."})
+        self.request(f"/api/projects/{self.pid}/chunks", "POST", {"text": "Third line."})
+        self.page.reload()
+        rows = self.page.locator("#chunks .chunk")
+        self.assertEqual(rows.count(), 3)
+        rows.nth(0).locator(".drag").drag_to(rows.nth(2))
+        self.page.wait_for_function("STATE.project.chunks[1].text === 'Original spoken line.'")
+        state = self.request("/api/state?p=" + self.pid)
+        self.assertEqual([chunk["text"] for chunk in state["project"]["chunks"]], [
+            "Second line.", "Original spoken line.", "Third line.",
+        ])
+        self.assertEqual(rows.locator(".idx").all_text_contents(), ["1", "2", "3"])
+
+    def test_reorder_rejects_a_stale_chunk_list(self):
+        state = self.request("/api/state?p=" + self.pid)
+        chunk_id = state["project"]["chunks"][0]["id"]
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            self.request(f"/api/projects/{self.pid}/chunks/order", "PUT", {"ids": [chunk_id, chunk_id]})
+        self.assertEqual(raised.exception.code, 409)
+        current = self.request("/api/state?p=" + self.pid)
+        self.assertEqual(current["project"]["chunks"][0]["id"], chunk_id)
+
     def test_project_switch_clears_loaded_preview(self):
         self.page.locator("#preview-open").click()
         self.page.locator("#preview-active").wait_for(state="visible")

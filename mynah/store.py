@@ -160,6 +160,19 @@ class Project:
     def find(self, chunk_id: str) -> Chunk | None:
         return next((c for c in self.chunks if c.id == chunk_id), None)
 
+    def reorder(self, chunk_ids: list[str]) -> None:
+        """Put chunks in ``chunk_ids`` order without changing their contents.
+
+        Requiring an exact permutation keeps a stale browser from silently
+        dropping a line that was added in another tab.
+        """
+        current = [chunk.id for chunk in self.chunks]
+        if len(chunk_ids) != len(current) or len(set(chunk_ids)) != len(chunk_ids) \
+                or set(chunk_ids) != set(current):
+            raise ValueError("order must contain every chunk exactly once")
+        by_id = {chunk.id: chunk for chunk in self.chunks}
+        self.chunks = [by_id[chunk_id] for chunk_id in chunk_ids]
+
     def live_fingerprints(self) -> set[str]:
         return {self.fingerprint(c) for c in self.chunks if c.text.strip()}
 

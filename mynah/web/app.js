@@ -25,6 +25,9 @@ let stateEpoch = 0;            // discard polls that predate a save or navigatio
 let navigation = 0;
 const edits = new Map();       // input -> unsaved value and its original project
 const saving = new Map();      // input -> request currently saving it
+let draggingRow = null;        // row currently owned by native drag and drop
+let dragStartOrder = [];
+let reordering = false;        // keep polls from undoing the optimistic order
 
 /* The model refuses a reference under 5 s of audio. The browser drops a few
    hundred ms between start() and the first captured sample, so a timer that
@@ -272,11 +275,72 @@ function autosize(textarea) {
   textarea.style.height = `${textarea.scrollHeight + 2}px`;
 }
 
+function chunkOrder() {
+  return [...$('chunks').children].map(row => row.dataset.chunkId);
+}
+
+function refreshChunkNumbers() {
+  [...$('chunks').children].forEach((row, index) => {
+    row.querySelector('.idx').textContent = index + 1;
+    row.querySelector('.drag').setAttribute('aria-label', `Reorder line ${index + 1}`);
+  });
+}
+
+async function saveChunkOrder(ids) {
+  const pid = PID;
+  reordering = true;
+  stateEpoch++;
+  closePreview();
+  try {
+    await flushEdits(pid);
+    if (pid !== PID) return;
+    const state = await put(`/api/projects/${pid}/chunks/order`, { ids });
+    if (pid === PID) apply(state);
+  } catch (error) {
+    if (pid === PID) {
+      try { apply(await api(`/api/state?p=${encodeURIComponent(pid)}`)); } catch {}
+    }
+    throw error;
+  } finally {
+    reordering = false;
+  }
+}
+
+function finishChunkDrag() {
+  if (!draggingRow) return;
+  const before = dragStartOrder;
+  const after = chunkOrder();
+  draggingRow.classList.remove('dragging');
+  draggingRow = null;
+  dragStartOrder = [];
+  if (before.join('|') !== after.join('|')) saveChunkOrder(after).catch(fail);
+}
+
+$('chunks').addEventListener('dragover', (event) => {
+  if (!draggingRow) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const otherRows = [...$('chunks').children].filter(row => row !== draggingRow);
+  const before = otherRows.find(row => {
+    const box = row.getBoundingClientRect();
+    return event.clientY < box.top + box.height / 2;
+  });
+  $('chunks').insertBefore(draggingRow, before || null);
+  refreshChunkNumbers();
+});
+$('chunks').addEventListener('drop', (event) => {
+  if (draggingRow) event.preventDefault();
+});
+
 function buildRow(chunk) {
   const li = document.createElement('li');
   li.className = 'chunk';
+  li.dataset.chunkId = chunk.id;
   li.innerHTML = `
-    <span class="n"><span class="dot"></span><span class="idx"></span></span>
+    <span class="n">
+      <button class="drag" draggable="true" title="Drag to reorder" aria-label="Reorder line">⠿</button>
+      <span class="marker"><span class="dot"></span><span class="idx"></span></span>
+    </span>
     <textarea rows="1" spellcheck="false" placeholder="Empty line — type something to say"></textarea>
     <span class="side">
       <button class="ghost icon play" title="Play take">▶</button>
@@ -290,6 +354,26 @@ function buildRow(chunk) {
   bindEdit(text, () => P(`/chunks/${chunk.id}`), () => ({ text: text.value }));
   const pause = li.querySelector('.pause');
   bindEdit(pause, () => P(`/chunks/${chunk.id}`), () => ({ pause_after: +pause.value }));
+  const handle = li.querySelector('.drag');
+  handle.addEventListener('dragstart', (event) => {
+    draggingRow = li;
+    dragStartOrder = chunkOrder();
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', chunk.id);
+    closePreview();
+    requestAnimationFrame(() => { if (draggingRow === li) li.classList.add('dragging'); });
+  });
+  handle.addEventListener('dragend', finishChunkDrag);
+  handle.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    const sibling = event.key === 'ArrowUp' ? li.previousElementSibling : li.nextElementSibling;
+    if (!sibling) return;
+    if (event.key === 'ArrowUp') $('chunks').insertBefore(li, sibling);
+    else $('chunks').insertBefore(sibling, li);
+    refreshChunkNumbers();
+    saveChunkOrder(chunkOrder()).catch(fail);
+  });
   li.querySelector('.regen').addEventListener('click', () =>
     generate(chunk.id).catch(fail));
   li.querySelector('.drop').addEventListener('click', () =>
@@ -321,14 +405,14 @@ function renderChunks(project) {
     let li = rows.get(chunk.id);
     const fresh = !li;
     if (fresh) { li = buildRow(chunk); rows.set(chunk.id, li); }
-    if (li.parentNode !== list || list.children[index] !== li) {
+    if (!draggingRow && !reordering && (li.parentNode !== list || list.children[index] !== li)) {
       list.insertBefore(li, list.children[index] || null);
     }
     // now-playing is owned by highlightPlayingLine(), which only touches the
     // DOM when the playing segment actually changes — an unconditional reset
     // here would erase it on every poll tick and never get a chance to
     // reapply, since from the highlighter's perspective nothing changed.
-    li.className = `chunk s-${chunk.status}${li.classList.contains('now-playing') ? ' now-playing' : ''}`;
+    li.className = `chunk s-${chunk.status}${li.classList.contains('now-playing') ? ' now-playing' : ''}${li === draggingRow ? ' dragging' : ''}`;
     li.dataset.fingerprint = chunk.fingerprint;
     li.querySelector('.idx').textContent = index + 1;
     li.querySelector('.n').title = chunk.status;
@@ -344,6 +428,7 @@ function renderChunks(project) {
     error.textContent = chunk.error || '';
   });
   for (const [id, li] of rows) if (!seen.has(id)) { li.remove(); rows.delete(id); }
+  refreshChunkNumbers();
 
   const tally = project.chunks.reduce((acc, c) => (acc[c.status] = (acc[c.status] || 0) + 1, acc), {});
   const order = ['ready', 'stale', 'queued', 'rendering', 'no-voice', 'empty'];
