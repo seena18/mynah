@@ -111,7 +111,12 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
 .chunk .marker { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 16px; }
 .chunk .drag {
   width: 24px; height: 30px; padding: 0; border: 0; border-radius: 4px;
-  background: transparent; color: var(--faint); cursor: grab; font-size: 17px; line-height: 1;
+  background: transparent; color: var(--faint); cursor: grab;
+}
+.chunk .drag::before {
+  content: ""; display: block; width: 10px; height: 15px; margin: auto;
+  background-image: radial-gradient(circle, currentColor 1.35px, transparent 1.55px);
+  background-size: 5px 5px;
 }
 .chunk .drag:hover, .chunk .drag:focus-visible { color: var(--text); background: var(--raise); outline: none; }
 .chunk .drag:active { cursor: grabbing; }

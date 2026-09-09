@@ -338,7 +338,7 @@ function buildRow(chunk) {
   li.dataset.chunkId = chunk.id;
   li.innerHTML = `
     <span class="n">
-      <button class="drag" draggable="true" title="Drag to reorder" aria-label="Reorder line">⠿</button>
+      <button class="drag" draggable="true" title="Drag to reorder" aria-label="Reorder line"></button>
       <span class="marker"><span class="dot"></span><span class="idx"></span></span>
     </span>
     <textarea rows="1" spellcheck="false" placeholder="Empty line — type something to say"></textarea>
