@@ -3,8 +3,8 @@
 # installed as a package, hence `package = false`.
 [project]
 name = "mynah"
-version = "1.0.0"
-description = "Self-hosted voice cloning TTS with per-chunk regeneration"
+version = "1.0.1"
+description = "Local voice cloning TTS with per-line regeneration"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10,<3.13"
