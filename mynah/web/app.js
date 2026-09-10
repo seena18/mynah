@@ -917,11 +917,13 @@ $('export').addEventListener('click', async () => {
   const response = await fetch(P('/export.wav'));
   if (!response.ok) { toast((await response.json()).detail); return; }
   const url = URL.createObjectURL(await response.blob());
+  const filename = `${STATE.project.title || 'mynah'}.wav`;
   const link = Object.assign(document.createElement('a'), {
-    href: url, download: `${STATE.project.title || 'mynah'}.wav`,
+    href: url, download: filename,
   });
   link.click();
-  URL.revokeObjectURL(url);
+  toast(`downloaded ${filename}`);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 });
 for (const key of ['temperature', 'top_p', 'top_k', 'repetition_penalty']) {
   const input = $(`p-${key}`);
