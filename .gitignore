@@ -7,3 +7,4 @@ venv/
 
 # demo recording intermediates (webm, segments, palette, wav)
 docs/raw/
+frontend/node_modules/

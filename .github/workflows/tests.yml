@@ -5,6 +5,23 @@ on:
   pull_request:
 
 jobs:
+  frontend:
+    # The built assets are committed so end users never need Node. Verify that
+    # they still match the React source on every change.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: git diff --exit-code -- mynah/web
+
   unit:
     # Everything that does not need the model: splitting, fingerprints, chunk
     # status, project migration, and the stitch's pause and loudness checks.

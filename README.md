@@ -203,7 +203,8 @@ mynah/
   store.py    projects, chunks, fingerprints, script splitting
   audio.py    decode, loudness-normalise, stitch
   server.py   HTTP API
-  web/        the page
+  web/        compiled React app served by FastAPI
+frontend/     React source and Vite build config
 data/                                (gitignored, all of it)
   projects/<id>/project.json         one file per project
   voices/<id>/                       reference.wav, voice.pt, meta.json
@@ -212,6 +213,19 @@ data/                                (gitignored, all of it)
 
 The whole UI reads one `GET /api/state?p=<id>`, polled. There is no client-side
 copy of the project to drift out of sync.
+
+The compiled frontend is committed, so running mynah never requires Node. To
+work on the interface, run the Python app on port 8765, then use Vite's local
+server (it proxies `/api` to FastAPI):
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Run `npm run build` before committing frontend changes; it refreshes the static
+assets under `mynah/web/`.
 
 ### The weights
 

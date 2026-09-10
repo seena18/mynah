@@ -27,6 +27,9 @@ body {
   font: 14.5px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+.boot {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: 14px;
+}
 h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .mono { font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
@@ -239,14 +242,32 @@ main { flex: 1; width: 100%; max-width: 920px; margin: 0 auto; padding: 18px var
 @media (max-width: 760px) {
   .bar { flex-wrap: wrap; height: auto; min-height: var(--bar-h); padding: 8px 12px; row-gap: 6px; gap: 8px; }
   .sep { display: none; }
-  .project { min-width: 0; flex-wrap: wrap; }
-  .project select { max-width: 150px; }
-  .title { width: 110px; }
+  .bar.top .brand { order: 1; }
+  .bar.top > .grow { order: 2; }
+  #open-voices { order: 3; }
+  #open-settings { order: 4; }
+  #engine { order: 5; }
+  .project {
+    order: 6; width: 100%; min-width: 0;
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 4px;
+  }
+  .project select { width: 100%; min-width: 0; max-width: none; }
+  .title { width: 100%; min-width: 0; }
+  .project .ghost { padding-inline: 7px; }
   .toolbar { flex-wrap: wrap; }
   .toolbar select { min-width: 140px; }
   .chunk { grid-template-columns: 48px 1fr; }
   .chunk .side { grid-column: 2; justify-content: flex-end; }
-  #counts { display: none; }
+  .bar.bottom {
+    display: grid; grid-template-columns: auto auto 1fr auto; align-items: center;
+  }
+  .bar.bottom > .grow, #counts { display: none; }
+  #generate { grid-column: 1; grid-row: 1; }
+  #stop { grid-column: 2; grid-row: 1; }
+  #queue { grid-column: 3; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #activity-toggle { grid-column: 4; grid-row: 1; }
+  #preview-open, #preview-active { grid-column: 3; grid-row: 2; justify-self: end; }
+  #export { grid-column: 4; grid-row: 2; }
   .activity { bottom: 0; }
   .wave { width: 110px; }
   #preview-time { display: none; }
