@@ -24,6 +24,7 @@ export function TopBar({
   onRemember,
   onSave,
   titleDraft,
+  openNewProject,
   openVoices,
   openSettings,
 }) {
@@ -39,12 +40,6 @@ export function TopBar({
   const engineText = state.engine.state === 'loading' && state.engine.progress
     ? state.engine.progress
     : engineLabel;
-
-  const newProject = () => {
-    const name = window.prompt('Project name', 'Untitled');
-    if (name === null) return;
-    post('/api/projects', { title: name }).then(onApply).catch(onFail);
-  };
 
   const deleteProject = () => {
     const count = project.chunks.length;
@@ -79,7 +74,7 @@ export function TopBar({
           onBlur={() => onSave('title').catch(onFail)}
           onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
         />
-        <button id="new-project" className="ghost" title="New project" onClick={newProject}>+ New</button>
+        <button id="new-project" className="ghost" title="New project" onClick={openNewProject}>+ New</button>
         <button id="delete-project" className="ghost danger icon" title="Delete this project" disabled={state.projects.length < 2} onClick={deleteProject}>✕</button>
       </div>
       <span className="grow" />
@@ -94,6 +89,55 @@ export function TopBar({
         title={state.engine.error || (state.engine.loader ? `weights: ${state.engine.loader}` : '')}
       >{engineText} · {state.engine.device}</span>
     </header>
+  );
+}
+
+export function NewProjectModal({ open, close, onApply, onFail }) {
+  const [name, setName] = useState('Untitled');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setName('Untitled');
+    setTimeout(() => inputRef.current?.select(), 30);
+  }, [open]);
+
+  const create = (event) => {
+    event.preventDefault();
+    post('/api/projects', { title: name })
+      .then((next) => {
+        onApply(next);
+        close();
+      })
+      .catch(onFail);
+  };
+
+  return (
+    <div id="new-project-modal" className="modal" hidden={!open} role="dialog" aria-modal="true" aria-labelledby="new-project-title">
+      <form className="sheet compact" onSubmit={create}>
+        <header>
+          <h2 id="new-project-title">New project</h2>
+          <span className="grow" />
+          <button type="button" className="ghost icon" data-close title="Close" onClick={close}>✕</button>
+        </header>
+        <label className="modal-field" htmlFor="new-project-name">
+          <span className="label">Project name</span>
+          <input
+            id="new-project-name"
+            ref={inputRef}
+            value={name}
+            placeholder="Untitled"
+            spellCheck="false"
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <footer>
+          <span className="grow" />
+          <button type="button" className="ghost" data-close onClick={close}>Cancel</button>
+          <button id="create-project" type="submit" className="btn primary">Create project</button>
+        </footer>
+      </form>
+    </div>
   );
 }
 

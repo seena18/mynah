@@ -9,6 +9,7 @@ import { api, del, post, put } from './api.js';
 import { drawWave, formatTime, ink, peaksFrom, surface } from './audio.js';
 import {
   ChunkRow,
+  NewProjectModal,
   ScriptModal,
   SettingsDrawer,
   Toolbar,
@@ -691,6 +692,7 @@ function App() {
         onRemember={rememberDraft}
         onSave={saveField}
         titleDraft={draftsRef.current.get('title')?.value}
+        openNewProject={() => setOverlay('new-project')}
         openVoices={() => setOverlay('voices')}
         openSettings={() => setOverlay('settings')}
       />
@@ -785,6 +787,12 @@ function App() {
       <ScriptModal
         open={overlay === 'script'}
         project={project}
+        close={() => setOverlay(null)}
+        onApply={applyState}
+        onFail={fail}
+      />
+      <NewProjectModal
+        open={overlay === 'new-project'}
         close={() => setOverlay(null)}
         onApply={applyState}
         onFail={fail}

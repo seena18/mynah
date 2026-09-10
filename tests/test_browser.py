@@ -95,6 +95,29 @@ class Browser(unittest.TestCase):
         self.assertEqual(state["project"]["title"], "Test A")
         self.assertTrue(any(v["id"] == "testvoice" for v in state["voices"]))
 
+    def test_footer_stays_at_viewport_bottom_for_short_project(self):
+        footer_bottom = self.page.locator("footer.bar.bottom").evaluate(
+            "node => node.getBoundingClientRect().bottom"
+        )
+        viewport_height = self.page.evaluate("window.innerHeight")
+        self.assertAlmostEqual(footer_bottom, viewport_height, delta=1)
+
+    def test_new_project_dialog_creates_and_switches_project(self):
+        self.page.locator("#new-project").click()
+        dialog = self.page.locator("#new-project-modal")
+        dialog.wait_for(state="visible")
+        name = self.page.locator("#new-project-name")
+        self.assertEqual(name.input_value(), "Untitled")
+        name.fill("Created in the app")
+        name.press("Enter")
+        dialog.wait_for(state="hidden")
+        self.page.wait_for_function(
+            "STATE.project.title === 'Created in the app' && STATE.project.chunks.length === 0"
+        )
+        self.assertEqual(self.page.locator("#title").input_value(), "Created in the app")
+        self.assertIn("?p=", self.page.url)
+        self.assertTrue(self.page.locator("#empty").is_visible())
+
     def test_reroll_plays_new_audio_at_same_url(self):
         chunk = self.wait_ready()
         url = f"/api/projects/{self.pid}/takes/{chunk['id']}.wav?v={chunk['fingerprint']}"
