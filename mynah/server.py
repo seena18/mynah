@@ -137,7 +137,7 @@ def split(pid: str, body: SplitBody) -> dict:
         project = _project(pid)
         project.chunks = [store.Chunk(text=text) for text in pieces]
         project.save()
-    RENDER.note(f"split into {len(pieces)} chunks")
+    RENDER.note(f"split into {len(pieces)} lines")
     return RENDER.snapshot(pid)
 
 
@@ -200,7 +200,7 @@ def delete_chunk(pid: str, chunk_id: str) -> dict:
 def generate_chunk(pid: str, chunk_id: str) -> dict:
     _project(pid)
     if not RENDER.submit(pid, [chunk_id]):
-        raise HTTPException(400, "chunk is unknown or already queued")
+        raise HTTPException(400, "line is unknown or already queued")
     return RENDER.snapshot(pid)
 
 
@@ -210,7 +210,7 @@ def generate_all(pid: str) -> dict:
         project = _project(pid)
         stale = [c.id for c in project.chunks if project.status(c) == "stale"]
     queued = RENDER.submit(pid, stale)
-    RENDER.note(f"queued {queued} chunk(s)")
+    RENDER.note(f"queued {queued} line(s)")
     return RENDER.snapshot(pid)
 
 

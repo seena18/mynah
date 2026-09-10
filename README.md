@@ -1,7 +1,7 @@
 # mynah
 
 Self-hosted voice cloning TTS. Clone a voice from a recording, paste a script,
-and generate it chunk by chunk — so fixing one bad line costs one line, not the
+and generate it line by line — so fixing one bad line costs one line, not the
 whole take.
 
 [v1.0.0 release notes and demo](https://github.com/seena18/mynah/releases/tag/v1.0.0)
@@ -63,7 +63,7 @@ sounds — its text, the voice, the sampling parameters. So:
 - Re-rendering it never touches the others.
 - Changing your mind back restores the earlier take instantly, because the file
   is still there under the same name.
-- The pause after a chunk is *not* part of the hash, since silence is added at
+- The pause after a line is *not* part of the hash, since silence is added at
   export time. Retiming costs nothing.
 - Neither is the project. Two projects that speak the same line in the same
   voice share one file on disk.
@@ -89,9 +89,9 @@ there is nothing to install with a package manager.
 ## Platforms
 
 Each row is a fresh `git clone` and the quick start above, with an empty model
-cache, on real hardware. "Per chunk" is a ~3-second line of speech.
+cache, on real hardware. "Per line" is a ~3-second line of speech.
 
-| Platform | Install, incl. 3 GB weights | Model load | Per chunk | Peak GPU memory |
+| Platform | Install, incl. 3 GB weights | Model load | Per line | Peak GPU memory |
 |---|---|---|---|---|
 | macOS, M1 Pro 16 GB (Metal) | 91 s | ~25 s | 5–12 s | 4.4 GB |
 | WSL2 Ubuntu 22.04, RTX 4080 SUPER (CUDA) | 161 s | 8 s | 0.4–1.0 s | 4.8 GB |
@@ -109,7 +109,7 @@ See the [retest results and scope](docs/platform-validation-2026-09-08.md).
 - **Linux needs nothing extra**: the PyPI wheel already bundles CUDA. Inside
   WSL2 the GPU is visible as long as the Windows NVIDIA driver is installed;
   no CUDA toolkit in the distro is required.
-- **CPU-only** is untested and will be slow — expect minutes per chunk.
+- **CPU-only** is untested and will be slow — expect minutes per line.
 
 ## Using it
 
@@ -151,16 +151,16 @@ Sampling parameters live behind ⚙; *Activity* in the footer shows the log.
 
 ### Getting output that does not sound choppy
 
-Prosody restarts at every chunk boundary — the model has no idea what came
+Prosody restarts at every line boundary — the model has no idea what came
 before. Two consequences worth knowing:
 
-- **Prefer longer chunks.** The default 280-character limit is a reasonable
+- **Prefer longer lines.** The default 280-character limit is a reasonable
   balance. Dropping it to 80 will make every sentence sound like it is starting
   a new paragraph.
-- **Let punctuation do the work.** A comma inside one chunk produces a far more
-  natural pause than splitting into two chunks with a gap between them.
+- **Let punctuation do the work.** A comma inside one line produces a far more
+  natural pause than splitting it into two lines with a gap between them.
 
-Use the per-chunk pause for real beats between ideas, not for breath.
+Use the per-line pause for real beats between ideas, not for breath.
 
 ## Speed, honestly
 

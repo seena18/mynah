@@ -249,7 +249,7 @@ export function ScriptModal({ open, project, close, onApply, onFail }) {
       <div className="sheet">
         <header>
           <h2 id="script-title">Paste script</h2>
-          <span className="muted">A blank line starts a new chunk. Longer paragraphs split at sentence ends.</span>
+          <span className="muted">Blank lines separate lines. Longer paragraphs split at sentence ends.</span>
           <span className="grow" />
           <button className="ghost icon" data-close title="Close" onClick={close}>✕</button>
         </header>
@@ -267,10 +267,10 @@ export function ScriptModal({ open, project, close, onApply, onFail }) {
             <span className="label">Max chars</span>
             <input id="max-chars" type="number" value={maxChars} min="60" max="900" step="20" onChange={(event) => setMaxChars(event.target.value)} />
           </label>
-          <span className="muted">Longer chunks sound smoother — prosody restarts at every boundary.</span>
+          <span className="muted">Longer lines sound smoother — prosody restarts at every boundary.</span>
           <span className="grow" />
           <button className="ghost" data-close onClick={close}>Cancel</button>
-          <button id="split" className="btn primary" onClick={split}>Split into chunks</button>
+          <button id="split" className="btn primary" onClick={split}>Split into lines</button>
         </footer>
       </div>
     </div>
@@ -410,7 +410,7 @@ export function SettingsDrawer({ open, project, close, onRemember, onSave, onApp
             </label>
           );
         })}
-        <p className="muted small">Changing any of these makes every chunk stale — they are part of a take&apos;s fingerprint.</p>
+        <p className="muted small">Changing any of these makes every line stale — they are part of a take&apos;s fingerprint.</p>
       </div>
       <header className="sub"><h2>Maintenance</h2></header>
       <div className="settings">
