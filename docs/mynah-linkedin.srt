@@ -1,0 +1,95 @@
+1
+00:00:01,200 --> 00:00:05,764
+Testing one, two, three. I'm saying a few words right now.
+
+2
+00:00:06,264 --> 00:00:09,737
+Testing one, two, three. I'm saying a few words right now.
+
+3
+00:00:10,570 --> 00:00:14,785
+Okay, yes, that was obvious. The first was the original recording.
+
+4
+00:00:14,785 --> 00:00:18,233
+The second was generated locally from a fifteen-second sample.
+
+5
+00:00:18,233 --> 00:00:19,766
+The cool part is,
+
+6
+00:00:19,766 --> 00:00:23,597
+the generated audio was done on a six-year-old MacBook Pro,
+
+7
+00:00:23,597 --> 00:00:25,130
+using Mynah with chatterbox.
+
+8
+00:00:25,680 --> 00:00:27,260
+As a matter of fact,
+
+9
+00:00:27,260 --> 00:00:31,368
+this entire video has been narrated using Mynah on the same 2020 M1
+
+10
+00:00:31,368 --> 00:00:32,000
+MacBook Pro.
+
+11
+00:00:32,550 --> 00:00:34,571
+So, here's how it works.
+
+12
+00:00:34,571 --> 00:00:38,614
+Start by recording or uploading five seconds of clean speech.
+
+13
+00:00:38,614 --> 00:00:41,444
+Mynah compiles the voice once using chatterbox,
+
+14
+00:00:41,444 --> 00:00:43,870
+then reuses it for every line.
+
+15
+00:00:44,400 --> 00:00:48,280
+Paste in a script. Blank lines become separate, editable takes.
+
+16
+00:00:48,850 --> 00:00:52,450
+Generate each line independently, and Mynah caches the result.
+
+17
+00:00:53,000 --> 00:00:55,800
+Preview the complete mix directly in your browser.
+
+18
+00:00:56,150 --> 00:00:58,050
+This runs entirely on your own machine.
+
+19
+00:00:58,540 --> 00:01:01,380
+No account, no API key, and nothing is uploaded.
+
+20
+00:01:02,600 --> 00:01:07,340
+If one line sounds wrong, change it and re-roll only that line.
+
+21
+00:01:07,340 --> 00:01:08,920
+The rest stays untouched.
+
+22
+00:01:09,290 --> 00:01:11,190
+This runs entirely on your own machine.
+
+23
+00:01:11,680 --> 00:01:15,650
+No account, no API key, and not one byte leaves the room.
+
+24
+00:01:16,700 --> 00:01:19,940
+No cloud API. The project is open source on GitHub.
